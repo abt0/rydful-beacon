@@ -1,0 +1,44 @@
+/*
+ * Device tree overlay for nRF52 DK with LIS3DH accelerometer
+ * 
+ * Wiring:
+ *   SDA -> P0.26
+ *   SCL -> P0.27
+ *   CS  -> VDD (I2C mode)
+ *   INT1 -> P0.02
+ */
+
+&pinctrl {
+    i2c0_default_alt: i2c0_default_alt {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SDA, 0, 26)>,
+                    <NRF_PSEL(TWIM_SCL, 0, 27)>;
+        };
+    };
+
+    i2c0_sleep_alt: i2c0_sleep_alt {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SDA, 0, 26)>,
+                    <NRF_PSEL(TWIM_SCL, 0, 27)>;
+            low-power-enable;
+        };
+    };
+};
+
+&i2c0 {
+    status = "okay";
+    pinctrl-0 = <&i2c0_default_alt>;
+    pinctrl-1 = <&i2c0_sleep_alt>;
+    pinctrl-names = "default", "sleep";
+
+    lis3dh: lis3dh@19 {
+        compatible = "st,lis2dh";
+        reg = <0x19>;
+        irq-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+        status = "okay";
+    };
+};
+
+&ficr {
+    status = "disabled";
+};
