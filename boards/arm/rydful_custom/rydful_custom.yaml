@@ -1,0 +1,17 @@
+identifier: rydful_custom
+name: Rydful Custom Board
+type: mcu
+arch: arm
+ram: 64
+flash: 512
+toolchain:
+  - zephyr
+  - gnuarmemb
+  - xtools
+supported:
+  - adc
+  - ble
+  - gpio
+  - i2c
+  - watchdog
+vendor: rydful
