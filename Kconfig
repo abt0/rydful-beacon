@@ -1,0 +1,13 @@
+source "Kconfig.zephyr"
+
+menu "Beacon Configuration"
+
+config BEACON_DIAGNOSTICS
+	bool "Enable beacon diagnostics"
+	default n
+	help
+	  Enable LIS3DH diagnostic checks on startup.
+	  This will verify the accelerometer is working correctly
+	  by reading WHO_AM_I register and testing data fetch.
+
+endmenu
