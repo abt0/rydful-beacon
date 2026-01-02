@@ -18,7 +18,7 @@ Desinged for Rydful App: https://rydful.com
 
 ## Hardware Requirements
 
-- **MCU**: Nordic nRF52832 (nRF52 DK) or nRF54L15 (nRF54L15 DK)
+- **MCU**: Nordic nRF52832 (nRF52 DK)
 - **Accelerometer**: LIS3DH or LIS2DH (I2C interface)
 - **LED**: Connected to `led0` alias (built-in on dev kits)
 
@@ -37,13 +37,11 @@ Desinged for Rydful App: https://rydful.com
 rydful-beacon/
 ├── CMakeLists.txt              # Build configuration
 ├── prj.conf                    # Zephyr project configuration
-├── sample.yaml                 # Zephyr sample metadata
+├── hardware/                   # Hardware description
 ├── src/
 │   └── main.c                  # Main application source
 └── boards/
-    ├── nrf52dk_nrf52832.conf       # nRF52 DK board config
     ├── nrf52dk_nrf52832.overlay    # nRF52 DK device tree overlay
-    ├── nrf54l15dk_nrf54l15_cpuapp_hpf_gpio.overlay  # nRF54L15 DK overlay
     └── arm/
         └── rydful_custom/          # Custom PCB board definition
             ├── rydful_custom.dts           # Device tree
@@ -61,7 +59,6 @@ rydful-beacon/
 |-------|-------------|----------|
 | `nrf52dk_nrf52832` | Nordic nRF52 DK | Development/testing with external LIS3DH |
 | `rydful_custom` | Custom PCB | Production board with integrated LIS3DHTR |
-| `nrf54l15dk/nrf54l15/cpuapp` | Nordic nRF54L15 DK | Future development |
 
 ## Configuration
 
@@ -118,9 +115,6 @@ west build -b nrf52dk_nrf52832 -p
 
 # Build for Rydful Custom PCB (production board)
 west build -b rydful_custom -p -- -DBOARD_ROOT=.
-
-# Build for nRF54L15 DK
-west build -b nrf54l15dk/nrf54l15/cpuapp -p
 ```
 
 ### Flash
