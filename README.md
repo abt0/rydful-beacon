@@ -1,6 +1,6 @@
 # Rydful Beacon
 
-A motion-triggered BLE beacon application for Nordic nRF52/nRF54 microcontrollers using the Zephyr RTOS. The device remains in sleep mode until motion is detected via an LIS3DH accelerometer, then starts BLE advertising to enable presence detection.
+A motion-triggered BLE beacon application for Nordic nRF52 microcontrollers using the Zephyr RTOS. The device remains in sleep mode until motion is detected via an LIS3DH accelerometer, then starts BLE advertising to enable presence detection.
 
 Desinged for Rydful App: https://rydful.com
 
