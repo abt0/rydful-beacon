@@ -28,7 +28,6 @@ LOG_MODULE_REGISTER(ble_beacon, LOG_LEVEL_INF);
 #define VARIANCE_WINDOW_SIZE      16      /* Number of samples for variance calculation */
 #define NO_MOTION_TIMEOUT_SEC     60      /* Timeout for highway cruising gaps */
 #define ACCEL_SAMPLE_INTERVAL_MS  100     /* Sampling interval when advertising (ms) */
-#define MOTION_CHECK_INTERVAL_MS  1000    /* Interval to check for motion timeout when idle (ms) */
 
 /* LED feedback configuration */
 #define STARTUP_BLINK_COUNT       3       /* Number of blinks on startup */

@@ -71,7 +71,6 @@ rydful-beacon/
 | `MIN_MOTION_HITS` | 3 | Required consecutive hits to confirm motion |
 | `NO_MOTION_TIMEOUT_SEC` | 60 | Seconds of no motion before stopping advertising |
 | `ACCEL_SAMPLE_INTERVAL_MS` | 100 | Accelerometer polling interval (when advertising) |
-| `MOTION_CHECK_INTERVAL_MS` | 1000 | Battery check interval when idle |
 
 ### Battery Monitoring
 
@@ -86,7 +85,7 @@ rydful-beacon/
 - **Device Name**: `Rydful_Beacon` (configurable via `CONFIG_BT_DEVICE_NAME`)
 - **Service UUID**: `0xFEAA` (16-bit)
 - **Manufacturer ID**: `0xFFFF` (development/testing)
-- **Advertising Interval**: 100-150 ms (fast interval)
+- **Advertising Interval**: 1000-1500 ms (slow interval for power savings)
 - **Mode**: Connectable, scannable
 
 ### BLE Advertising Data
@@ -192,10 +191,10 @@ Connect via serial console (115200 baud) to view logs:
 ==========================================
   Motion-Triggered BLE Beacon
 ==========================================
-Sudden change threshold: 0.25 m/s²
+Sudden change threshold^2: 0.0625
 Variance threshold: 0.0100
 Min motion hits: 3 (debounce)
-Sample interval: 100 ms (advertising), 1000 ms (idle)
+Sample interval: 100 ms
 No-motion timeout: 60 seconds
 Battery update interval: 30 seconds
 Battery range: 2200 mV (0%) - 3000 mV (100%)
