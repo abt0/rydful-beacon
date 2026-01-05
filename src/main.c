@@ -28,7 +28,7 @@ LOG_MODULE_REGISTER(ble_beacon, LOG_LEVEL_INF);
 /* Note: At 1Hz ODR, each sample is 1 second apart - thresholds tuned for sensitivity */
 #define MOTION_THRESHOLD          1.0f    /* Absolute delta threshold (after EMA filtering) */
 #define NOISE_DEADBAND            0.9f    /* Ignore deltas below this (sensor quantization noise) */
-#define VARIANCE_THRESHOLD        1.8f    /* Variance threshold for road vibrations */
+#define VARIANCE_THRESHOLD        5.0f    /* Variance threshold for road vibrations */
 #define MIN_MOTION_HITS           5       /* Require 5 hits (5 seconds at 1Hz) */
 #define VARIANCE_WINDOW_SIZE      8       /* Number of samples for variance calculation */
 #define EMA_ALPHA                 0.3f    /* EMA smoothing factor (0.3 = moderate smoothing) */
