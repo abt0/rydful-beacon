@@ -1068,16 +1068,22 @@ static void run_main_loop(void)
 			int64_t now = k_uptime_get();
 
 			/*
-			 * When advertising, use interrupt if available.
-			 * Wait for data-ready with timeout to ensure we process timeouts.
+			 * When advertising, wait for data-ready with timeout.
+			 * Only process motion when new data actually arrived.
+			 * Timeout allows us to still process advertising state/battery updates.
 			 */
 			if (hw_interrupt_available) {
-				k_sem_take(&data_ready_sem, K_MSEC(200));
+				int sem_ret = k_sem_take(&data_ready_sem, K_MSEC(200));
+				/* Only detect motion if new data arrived (sem_ret == 0) */
+				if (sem_ret == 0 && detect_motion()) {
+					ble.last_motion_time = now;
+				}
+			} else {
+				if (detect_motion()) {
+					ble.last_motion_time = now;
+				}
 			}
 
-			if (detect_motion()) {
-				ble.last_motion_time = now;
-			}
 			process_advertising_state(now);
 			process_battery_update(now);
 
