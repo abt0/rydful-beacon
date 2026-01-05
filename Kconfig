@@ -10,21 +10,4 @@ config BEACON_DIAGNOSTICS
 	  This will verify the accelerometer is working correctly
 	  by reading WHO_AM_I register and testing data fetch.
 
-config BEACON_CALIBRATION
-	bool "Enable motion calibration mode"
-	default n
-	help
-	  Enable calibration logging to tune motion detection thresholds.
-	  When enabled, logs delta_sq, variance, and magnitude values
-	  for every sample. Use this to find optimal threshold values
-	  for your specific motion patterns.
-
-	  Steps to calibrate:
-	  1. Enable this option and rebuild
-	  2. Place device at rest - note values (noise floor)
-	  3. Simulate motion - note values (motion signature)
-	  4. Set MOTION_THRESHOLD_MS2_SQ between noise and motion
-	  5. Set VARIANCE_THRESHOLD between noise and motion
-	  6. Disable this option for production
-
 endmenu

@@ -2,19 +2,17 @@
 
 A motion-triggered BLE beacon application for Nordic nRF52 microcontrollers using the Zephyr RTOS. The device remains in sleep mode until motion is detected via an LIS3DH accelerometer, then starts BLE advertising to enable presence detection.
 
-Desinged for Rydful App: https://rydful.com
+Designed for Rydful App: https://rydful.com
 
 ## Features
 
-- **Low-Power Interrupt-Driven Wake** – CPU sleeps deeply and wakes only on accelerometer INT1 interrupt
-- **Motion-Triggered Advertising** – BLE advertising starts only when motion is detected
-- **Dual Motion Detection Algorithm**:
-  - Sudden change detection for starts, stops, and turns
-  - Variance-based detection for highway cruising (road vibrations)
+- **Hardware-Driven Motion Detection** – LIS3DH accelerometer handles motion detection internally, MCU only wakes on threshold events
+- **Ultra-Low Power Sleep** – CPU sleeps indefinitely until real motion occurs (~13 µA total idle current)
+- **Motion-Triggered Advertising** – BLE advertising starts only when motion exceeds hardware threshold
 - **Battery Monitoring** – Real-time battery voltage measurement with percentage calculation, broadcast via BLE manufacturer data
 - **LED Feedback** – Visual indication of advertising state and startup sequence
 - **Configurable Timeouts** – Advertising stops after configurable period of no motion (default: 60 seconds)
-- **Debounce Filtering** – Requires multiple motion hits to confirm motion, reducing false positives
+- **High-Pass Filtered Detection** – Gravity is filtered out, only acceleration changes trigger wake
 
 ## Hardware Requirements
 
@@ -36,6 +34,7 @@ Desinged for Rydful App: https://rydful.com
 ```
 rydful-beacon/
 ├── CMakeLists.txt              # Build configuration
+├── Kconfig                     # Custom Kconfig options
 ├── prj.conf                    # Zephyr project configuration
 ├── hardware/                   # Hardware description
 ├── src/
@@ -62,21 +61,23 @@ rydful-beacon/
 
 ## Configuration
 
-### Motion Detection Parameters
+### Hardware Motion Detection Parameters
+
+These are defined in `src/main.c`:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `MOTION_THRESHOLD_MS2` | 0.25 m/s² | Threshold for sudden acceleration changes |
-| `VARIANCE_THRESHOLD` | 0.01 | Variance threshold for vibration detection |
-| `MIN_MOTION_HITS` | 3 | Required consecutive hits to confirm motion |
+| `HW_MOTION_THRESHOLD_MG` | 48 mg | Acceleration threshold for motion detection |
+| `HW_MOTION_DURATION` | 1 sample | Required samples above threshold (debounce) |
 | `NO_MOTION_TIMEOUT_SEC` | 60 | Seconds of no motion before stopping advertising |
-| `ACCEL_SAMPLE_INTERVAL_MS` | 100 | Accelerometer polling interval (when advertising) |
+
+The LIS3DH uses its internal high-pass filter to remove gravity, so only acceleration *changes* trigger the interrupt.
 
 ### Battery Monitoring
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `BATTERY_LOW_THRESHOLD_MV` | 2200 mV | 0% battery threshold |
+| `BATTERY_LOW_THRESHOLD_MV` | 2000 mV | 0% battery threshold |
 | `BATTERY_FULL_MV` | 3000 mV | 100% battery threshold |
 | `BATTERY_UPDATE_INTERVAL_SEC` | 30 | Battery status update interval |
 
@@ -85,7 +86,7 @@ rydful-beacon/
 - **Device Name**: `Rydful_Beacon` (configurable via `CONFIG_BT_DEVICE_NAME`)
 - **Service UUID**: `0xFEAA` (16-bit)
 - **Manufacturer ID**: `0xFFFF` (development/testing)
-- **Advertising Interval**: 1000-1500 ms (slow interval for power savings)
+- **Advertising Interval**: 250-400 ms
 - **Mode**: Connectable, scannable
 
 ### BLE Advertising Data
@@ -99,18 +100,14 @@ The manufacturer-specific data contains:
 
 ### Prerequisites
 
-- [Zephyr SDK](https://docs.zephyrproject.org/latest/develop/getting_started/index.html) installed
+- [nRF Connect SDK](https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/installation.html) installed
 - West tool configured
-- nRF Connect SDK (optional, for Nordic-specific features)
 
 ### Build Commands
 
 ```bash
-# Set up Zephyr environment
-source ~/zephyrproject/zephyr/zephyr-env.sh
-
 # Build for nRF52 DK (development/testing with external accelerometer)
-west build -b nrf52dk_nrf52832 -p
+west build -b nrf52dk/nrf52832 -p
 
 # Build for Rydful Custom PCB (production board)
 west build -b rydful_custom -p -- -DBOARD_ROOT=.
@@ -167,21 +164,37 @@ nrfjprog --program build/zephyr/zephyr.hex --chiperase --verify
 nrfjprog --reset
 ```
 
-## Usage
+## How It Works
 
-### nRF52 DK (Development)
+### State Machine
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  SLEEP MODE                                                 │
+│  • LIS3DH: Hardware threshold interrupt (>48mg)             │
+│  • nRF52: System ON sleep (~1.9 µA)                         │
+│  • Total: ~13 µA                                            │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ Motion exceeds threshold
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  ACTIVE MODE                                                │
+│  • BLE advertising active                                   │
+│  • Each motion interrupt resets 60-second timeout           │
+│  • LED ON                                                   │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ No motion for 60 seconds
+                       ▼
+              Back to SLEEP MODE
+```
+
+### Usage
 
 1. **Power on** – LED blinks 3 times during startup
-2. **Sleep mode** – LED off, no BLE advertising
+2. **Sleep mode** – LED off, no BLE advertising, ultra-low power
 3. **Motion detected** – LED turns on, BLE advertising starts
-4. **No motion** – After 60 seconds, advertising stops
-
-### Custom PCB (Production)
-
-1. **Power on** – Device initializes (no LED feedback)
-2. **Sleep mode** – Low power, no BLE advertising
-3. **Motion detected** – BLE advertising starts
-4. **No motion** – After 60 seconds, advertising stops and device returns to sleep
+4. **Continuous motion** – Each motion event resets the 60-second timeout
+5. **No motion** – After 60 seconds of no motion, advertising stops
 
 ### Monitoring
 
@@ -191,31 +204,55 @@ Connect via serial console (115200 baud) to view logs:
 ==========================================
   Motion-Triggered BLE Beacon
 ==========================================
-Sudden change threshold^2: 0.0625
-Variance threshold: 0.0100
-Min motion hits: 3 (debounce)
-Sample interval: 100 ms
+Mode: Hardware motion detection
+Motion threshold: 48 mg
+Motion duration: 1 samples
 No-motion timeout: 60 seconds
 Battery update interval: 30 seconds
-Battery range: 2200 mV (0%) - 3000 mV (100%)
+Battery range: 2000 mV (0%) - 3000 mV (100%)
 Device name: Rydful_Beacon
 ==========================================
+Hardware motion mode active (threshold: 48mg, duration: 1 samples)
+(Move the device to start BLE advertising)
+Entering sleep (waiting for motion)...
+Motion detected - waking up!
+>>> BLE advertising STARTED (motion detected)
 ```
+
+## Power Consumption
+
+| State | Current | Description |
+|-------|---------|-------------|
+| Sleep | ~13 µA | nRF52 System ON + LIS3DH @ 10Hz |
+| Active (advertising) | ~1-3 mA avg | BLE advertising + occasional motion interrupts |
+
+### Battery Life Estimate (2x AA batteries @ 2500 mAh)
+
+| Usage Pattern | Estimated Life |
+|---------------|----------------|
+| Mostly idle (parked car) | ~1.5-2 years |
+| Active 8 hours/day | ~6-12 months |
 
 ## Enabled Zephyr Subsystems
 
 - `CONFIG_GPIO` – LED control
-- `CONFIG_LOG` – Logging (level 3)
+- `CONFIG_LOG` – Logging
 - `CONFIG_BT` – Bluetooth stack
 - `CONFIG_BT_PERIPHERAL` – Peripheral role
 - `CONFIG_I2C` – Accelerometer communication
 - `CONFIG_SENSOR` – Sensor subsystem
-- `CONFIG_LIS2DH` – LIS3DH/LIS2DH driver with interrupt trigger support
+- `CONFIG_LIS2DH` – LIS3DH/LIS2DH driver (trigger disabled, using direct register access)
 - `CONFIG_ADC` – Battery voltage measurement
-- `CONFIG_FPU` – Floating point support
+- `CONFIG_FPU` – Floating point support (for diagnostics)
 - `CONFIG_NEWLIB_LIBC` – Math library support
-- `CONFIG_PM_DEVICE` – Device power management
-- `CONFIG_PM_DEVICE_RUNTIME` – Runtime power management
+
+## Optional Configuration
+
+Enable hardware diagnostics on startup (verifies accelerometer is working):
+
+```conf
+CONFIG_BEACON_DIAGNOSTICS=y
+```
 
 ## License
 
