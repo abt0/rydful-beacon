@@ -13,9 +13,9 @@ CONFIG_HW_STACK_PROTECTION=y
 # Enable GPIO
 CONFIG_GPIO=y
 
-# Clock configuration
-CONFIG_CLOCK_CONTROL_NRF_K32SRC_RC=y
-CONFIG_CLOCK_CONTROL_NRF_K32SRC_500PPM=y
+# Clock configuration - use external 32.768kHz crystal (X1) for lowest power
+CONFIG_CLOCK_CONTROL_NRF_K32SRC_XTAL=y
+CONFIG_CLOCK_CONTROL_NRF_K32SRC_20PPM=y
 
 # Enable console over RTT (for debugging via J-Link)
 CONFIG_USE_SEGGER_RTT=y

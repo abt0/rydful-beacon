@@ -6,13 +6,13 @@ Designed for Rydful App: https://rydful.com
 
 ## Features
 
-- **Hardware-Driven Motion Detection** – LIS3DH accelerometer handles motion detection internally, MCU only wakes on threshold events
-- **Ultra-Low Power Sleep** – CPU sleeps indefinitely until real motion occurs (~13 µA total idle current)
+- **Hardware-Driven Motion Detection** – LIS3DH accelerometer handles motion detection internally at 1Hz, MCU only wakes on threshold events (~1s latency)
+- **Ultra-Low Power Sleep** – CPU sleeps indefinitely until real motion occurs (~2.5 µA total idle current with external LFXO)
 - **Motion-Triggered Advertising** – BLE advertising starts only when motion exceeds hardware threshold
-- **Battery Monitoring** – Real-time battery voltage measurement with percentage calculation, broadcast via BLE manufacturer data
-- **LED Feedback** – Visual indication of advertising state and startup sequence
-- **Configurable Timeouts** – Advertising stops after configurable period of no motion (default: 60 seconds)
+- **Battery Monitoring** – Battery voltage measurement with percentage calculation, broadcast via BLE manufacturer data
+- **Configurable Timeouts** – Advertising stops after configurable period of no motion (default: 30 seconds)
 - **High-Pass Filtered Detection** – Gravity is filtered out, only acceleration changes trigger wake
+- **Android CDM Compatible** – 250-400ms advertising interval for reliable companion app discovery
 
 ## Hardware Requirements
 
@@ -69,9 +69,9 @@ These are defined in `src/main.c`:
 |-----------|---------|-------------|
 | `HW_MOTION_THRESHOLD_MG` | 48 mg | Acceleration threshold for motion detection |
 | `HW_MOTION_DURATION` | 1 sample | Required samples above threshold (debounce) |
-| `NO_MOTION_TIMEOUT_SEC` | 60 | Seconds of no motion before stopping advertising |
+| `NO_MOTION_TIMEOUT_SEC` | 30 | Seconds of no motion before stopping advertising |
 
-The LIS3DH uses its internal high-pass filter to remove gravity, so only acceleration *changes* trigger the interrupt.
+The LIS3DH operates at **1Hz ODR** in low-power mode (~2µA) and uses its internal high-pass filter to remove gravity, so only acceleration *changes* trigger the interrupt. Wake latency is ~1 second.
 
 ### Battery Monitoring
 
@@ -79,14 +79,14 @@ The LIS3DH uses its internal high-pass filter to remove gravity, so only acceler
 |-----------|---------|-------------|
 | `BATTERY_LOW_THRESHOLD_MV` | 2000 mV | 0% battery threshold |
 | `BATTERY_FULL_MV` | 3000 mV | 100% battery threshold |
-| `BATTERY_UPDATE_INTERVAL_SEC` | 30 | Battery status update interval |
+| `BATTERY_UPDATE_INTERVAL_SEC` | 300 | Battery status update interval (5 minutes) |
 
 ### BLE Configuration
 
 - **Device Name**: `Rydful_Beacon` (configurable via `CONFIG_BT_DEVICE_NAME`)
 - **Service UUID**: `0xFEAA` (16-bit)
 - **Manufacturer ID**: `0xFFFF` (development/testing)
-- **Advertising Interval**: 250-400 ms
+- **Advertising Interval**: 250-400 ms (required for Android CDM compatibility)
 - **Mode**: Connectable, scannable
 
 ### BLE Advertising Data
@@ -171,34 +171,34 @@ nrfjprog --reset
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  SLEEP MODE                                                 │
-│  • LIS3DH: Hardware threshold interrupt (>48mg)             │
-│  • nRF52: System ON sleep (~1.9 µA)                         │
-│  • Total: ~13 µA                                            │
+│  • LIS3DH: Hardware threshold interrupt (>48mg) @ 1Hz       │
+│  • nRF52: System ON sleep with LFXO (~0.5 µA)               │
+│  • Total: ~2.5 µA                                           │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ Motion exceeds threshold
+                       │ Motion exceeds threshold (~1s latency)
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  ACTIVE MODE                                                │
-│  • BLE advertising active                                   │
-│  • Each motion interrupt resets 60-second timeout           │
-│  • LED ON                                                   │
+│  • BLE advertising (connectable, 250-400ms, -4dBm TX)       │
+│  • Each motion interrupt resets 30-second timeout           │
+│  • Total: ~0.7-0.8 mA                                       │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ No motion for 60 seconds
+                       │ No motion for 30 seconds
                        ▼
               Back to SLEEP MODE
 ```
 
 ### Usage
 
-1. **Power on** – LED blinks 3 times during startup
-2. **Sleep mode** – LED off, no BLE advertising, ultra-low power
-3. **Motion detected** – LED turns on, BLE advertising starts
-4. **Continuous motion** – Each motion event resets the 60-second timeout
-5. **No motion** – After 60 seconds of no motion, advertising stops
+1. **Power on** – Initialization sequence
+2. **Sleep mode** – No BLE advertising, ultra-low power (~5 µA)
+3. **Motion detected** – BLE advertising starts (~1 second wake latency)
+4. **Continuous motion** – Each motion event resets the 30-second timeout
+5. **No motion** – After 30 seconds of no motion, advertising stops
 
 ### Monitoring
 
-Connect via serial console (115200 baud) to view logs:
+Connect via RTT console (production PCB) or serial (115200 baud) to view logs:
 
 ```
 ==========================================
@@ -207,8 +207,8 @@ Connect via serial console (115200 baud) to view logs:
 Mode: Hardware motion detection
 Motion threshold: 48 mg
 Motion duration: 1 samples
-No-motion timeout: 60 seconds
-Battery update interval: 30 seconds
+No-motion timeout: 30 seconds
+Battery update interval: 300 seconds
 Battery range: 2000 mV (0%) - 3000 mV (100%)
 Device name: Rydful_Beacon
 ==========================================
@@ -221,36 +221,50 @@ Motion detected - waking up!
 
 ## Power Consumption
 
+*Note: All estimates are for the production PCB (nRF52832 + LIS3DHTR + passives only, no LED).*
+
 ### Current Draw by State
 
 | State | Current | Description |
 |-------|---------|-------------|
-| Sleep | ~13 µA | nRF52 System ON (~1.9µA) + LIS3DH @ 10Hz low-power (~11µA) |
-| Active (advertising) | ~1.5 mA avg | BLE advertising @ 250-400ms + battery ADC sampling |
-| Peak (TX burst) | ~8-10 mA | During BLE transmit events (~1-3ms per event) |
+| Sleep | ~2.5 µA | nRF52 System ON (~0.5µA with LFXO) + LIS3DH @ 1Hz (~2µA) |
+| Active (advertising) | ~0.7-0.8 mA avg | BLE connectable advertising @ 250-400ms, -4dBm TX |
+| Peak (TX burst) | ~4-5 mA | During BLE transmit events @ -4dBm (~1-3ms per event) |
 
 ### Component Breakdown (Sleep Mode)
 
 | Component | Current | Notes |
 |-----------|---------|-------|
-| nRF52832 System ON | ~1.9 µA | RAM retained, RTC running |
-| LIS3DH @ 10Hz LP mode | ~6-11 µA | Interrupt engine active, high-pass filter |
-| GPIO leakage | <0.1 µA | Negligible with proper configuration |
-| **Total Sleep** | **~10-13 µA** | Conservative estimate: 13µA |
+| nRF52832 System ON (LFXO) | ~0.5 µA | RAM retained, RTC running, external 32.768kHz crystal |
+| LIS3DHTR @ 1Hz LP mode | ~2 µA | Interrupt engine active, HP filter, 1s wake latency |
+| GPIO leakage | <0.1 µA | Minimal with proper configuration |
+| **Total Sleep** | **~2.5 µA** | |
 
 ### Component Breakdown (Active Mode)
 
 | Component | Current | Notes |
 |-----------|---------|-------|
-| BLE advertising | ~0.5-1.5 mA | 250-400ms interval, connectable/scannable |
-| LIS3DH motion monitoring | ~11 µA | Same as sleep, always running |
-| ADC sampling (periodic) | ~0.3 mA | Brief spikes every 30 seconds |
-| CPU overhead | ~0.1-0.3 mA | Processing interrupts, state management |
-| **Total Active** | **~1.0-2.0 mA** | Conservative estimate: 1.5mA |
+| BLE advertising | ~0.6-0.7 mA | 250-400ms interval, connectable/scannable, -4dBm TX |
+| LIS3DHTR @ 1Hz | ~2 µA | Same ODR as sleep |
+| ADC sampling (periodic) | ~1 µA avg | Brief spikes every 5 minutes |
+| CPU overhead | ~0.05 mA | Processing interrupts, state management |
+| **Total Active** | **~0.7-0.8 mA** | Conservative estimate: 0.75mA |
+
+### Power Optimizations Applied
+
+| Optimization | Impact | Trade-off |
+|--------------|--------|-----------|
+| External 32.768kHz LFXO | ~80% MCU sleep reduction | None (hardware present) |
+| Reduced TX power (-4dBm) | ~15% active reduction | Reduced range (~5-15m vs ~10-30m) |
+| LIS3DH 1Hz ODR | ~64% sensor sleep reduction | 1 second wake latency |
+| 30s no-motion timeout | ~3% overall | Slightly faster sleep transition |
+| 5-minute battery updates | ~1% overall | Less frequent battery status |
 
 ---
 
 ## Battery Life Calculations
+
+*Production PCB with power optimizations: 1Hz accelerometer ODR, 30s timeout, 5-min battery updates.*
 
 ### Supported Power Sources
 
@@ -269,8 +283,8 @@ Motion detected - waking up!
 |---------|-------------|-------------------|-----------|
 | **Parked Vehicle** | Garaged/parked, minimal vibration | ~5-15 min | 0-1 |
 | **Weekend Rider** | Motorcycle/classic car, weekend use only | ~2-4 hours | 1-2 (weekends only) |
-| **Commuter** | Daily work commute, 2× per day ~1h each | ~2-2.5 hours | 2 |
-| **Daily Driver** | Multiple short trips throughout day | ~3-4 hours | 4-6 |
+| **Commuter** | Daily work commute, 2× per day ~1h each | ~2 hours | 2 |
+| **Daily Driver** | Multiple short trips throughout day | ~3 hours | 4-6 |
 | **Heavy Use** | Delivery/rideshare, constant use | ~8-12 hours | 10-20 |
 
 ### Battery Life Formula
@@ -279,11 +293,11 @@ Motion detected - waking up!
 Total Daily Consumption (mAh/day) = (I_sleep × T_sleep) + (I_active × T_active)
 
 Where:
-  I_sleep  = 0.013 mA (13 µA)
-  I_active = 1.5 mA (conservative average)
+  I_sleep  = 0.0025 mA (2.5 µA with external LFXO)
+  I_active = 0.75 mA (conservative average, -4dBm TX power)
   T_sleep  = 24 - T_active (hours)
   T_active = Active hours per day + (trips × timeout / 3600)
-  timeout  = 60 seconds (advertising continues after last motion)
+  timeout  = 30 seconds (advertising continues after last motion)
 
 Battery Life (days) = Effective_Capacity / Daily_Consumption
 ```
@@ -294,47 +308,49 @@ Battery Life (days) = Effective_Capacity / Daily_Consumption
 
 | Usage Pattern | Active Hours/Day | Daily Draw (mAh) | Estimated Life |
 |---------------|------------------|------------------|----------------|
-| Parked Vehicle | 0.25h | 0.69 | **261 days** (~9 months) |
-| Weekend Rider | 0.57h (avg)* | 1.14 | **158 days** (~5 months) |
-| Commuter (2×/day) | 2.03h | 3.33 | **54 days** (~2 months) |
-| Daily Driver | 3.1h | 4.95 | **36 days** (~5 weeks) |
-| Heavy Use | 8h | 12.27 | **15 days** (~2 weeks) |
+| Parked Vehicle | 0.26h | 0.25 | **720 days** (~24 months) |
+| Weekend Rider | 0.58h (avg)* | 0.49 | **367 days** (~12 months) |
+| Commuter (2×/day) | 2.02h | 1.57 | **115 days** (~4 months) |
+| Daily Driver | 3.04h | 2.33 | **77 days** (~2.5 months) |
+| Heavy Use | 8.13h | 6.14 | **29 days** (~4 weeks) |
 
-*Weekend rider averaged: (4h × 2 days + 0h × 5 days) / 7 = 1.14h/day
+*Weekend rider averaged over 7 days
 
 #### 2× AAA Alkaline (1,000 mAh effective)
 
 | Usage Pattern | Active Hours/Day | Daily Draw (mAh) | Estimated Life |
 |---------------|------------------|------------------|----------------|
-| Parked Vehicle | 0.25h | 0.69 | **1,449 days** (~4 years) |
-| Weekend Rider | 0.57h (avg) | 1.14 | **877 days** (~2.4 years) |
-| Commuter (2×/day) | 2.03h | 3.33 | **300 days** (~10 months) |
-| Daily Driver | 3.1h | 4.95 | **202 days** (~7 months) |
-| Heavy Use | 8h | 12.27 | **82 days** (~3 months) |
+| Parked Vehicle | 0.26h | 0.25 | **4,000 days** (~11 years)† |
+| Weekend Rider | 0.58h (avg) | 0.49 | **2,041 days** (~5.6 years)† |
+| Commuter (2×/day) | 2.02h | 1.57 | **637 days** (~21 months) |
+| Daily Driver | 3.04h | 2.33 | **429 days** (~14 months) |
+| Heavy Use | 8.13h | 6.14 | **163 days** (~5.4 months) |
+
+†Limited by battery self-discharge (~2-3% per year), practical limit ~5-7 years.
 
 #### 2× AA Alkaline (2,400 mAh effective)
 
 | Usage Pattern | Active Hours/Day | Daily Draw (mAh) | Estimated Life |
 |---------------|------------------|------------------|----------------|
-| Parked Vehicle | 0.25h | 0.69 | **3,478 days** (~9.5 years)† |
-| Weekend Rider | 0.57h (avg) | 1.14 | **2,105 days** (~5.8 years)† |
-| Commuter (2×/day) | 2.03h | 3.33 | **721 days** (~2 years) |
-| Daily Driver | 3.1h | 4.95 | **485 days** (~1.3 years) |
-| Heavy Use | 8h | 12.27 | **196 days** (~6 months) |
+| Parked Vehicle | 0.26h | 0.25 | **9,600 days** (~26 years)† |
+| Weekend Rider | 0.58h (avg) | 0.49 | **4,898 days** (~13 years)† |
+| Commuter (2×/day) | 2.02h | 1.57 | **1,529 days** (~4.2 years) |
+| Daily Driver | 3.04h | 2.33 | **1,030 days** (~2.8 years) |
+| Heavy Use | 8.13h | 6.14 | **391 days** (~13 months) |
 
-†Note: Alkaline batteries self-discharge ~2-3% per year. Actual life limited to ~5-7 years maximum regardless of load.
+†Alkaline batteries self-discharge ~2-3% per year. Actual life limited to ~5-7 years maximum regardless of load.
 
 #### 2× AA Lithium (3,000 mAh effective)
 
 | Usage Pattern | Active Hours/Day | Daily Draw (mAh) | Estimated Life |
 |---------------|------------------|------------------|----------------|
-| Parked Vehicle | 0.25h | 0.69 | **4,348 days** (~12 years)† |
-| Weekend Rider | 0.57h (avg) | 1.14 | **2,632 days** (~7 years)† |
-| Commuter (2×/day) | 2.03h | 3.33 | **901 days** (~2.5 years) |
-| Daily Driver | 3.1h | 4.95 | **606 days** (~1.7 years) |
-| Heavy Use | 8h | 12.27 | **245 days** (~8 months) |
+| Parked Vehicle | 0.26h | 0.25 | **12,000 days** (~33 years)† |
+| Weekend Rider | 0.58h (avg) | 0.49 | **6,122 days** (~17 years)† |
+| Commuter (2×/day) | 2.02h | 1.57 | **1,911 days** (~5.2 years) |
+| Daily Driver | 3.04h | 2.33 | **1,288 days** (~3.5 years) |
+| Heavy Use | 8.13h | 6.14 | **489 days** (~16 months) |
 
-†Lithium batteries have ~1% annual self-discharge, supporting longer shelf life. Practical limit ~10 years.
+†Lithium batteries have ~1% annual self-discharge. Practical limit ~10 years.
 
 ### Commuter Scenario Deep Dive (2× daily, ~1h each)
 
@@ -343,23 +359,23 @@ This is a common use case: daily work commute with two trips.
 **Calculation breakdown:**
 - Morning commute: 1 hour active
 - Evening commute: 1 hour active  
-- Post-trip timeout: 60 seconds × 2 trips = 2 minutes
-- **Total active time**: 2h 2min/day ≈ 2.03 hours
+- Post-trip timeout: 30 seconds × 2 trips = 1 minute
+- **Total active time**: 2h 1min/day ≈ 2.02 hours
 
 **Daily energy consumption:**
 ```
-Sleep:   (24 - 2.03)h × 0.013mA = 0.286 mAh
-Active:  2.03h × 1.5mA           = 3.045 mAh
+Sleep:   (24 - 2.02)h × 0.0025mA = 0.055 mAh
+Active:  2.02h × 0.75mA          = 1.515 mAh
 ─────────────────────────────────────────────
-Total:                           = 3.33 mAh/day
+Total:                           = 1.57 mAh/day
 ```
 
 | Battery Type | Capacity | Estimated Life |
 |--------------|----------|----------------|
-| CR2032 | 180 mAh | **54 days** (~2 months) |
-| 2× AAA | 1,000 mAh | **300 days** (~10 months) |
-| 2× AA | 2,400 mAh | **721 days** (~2 years) |
-| 2× AA Lithium | 3,000 mAh | **901 days** (~2.5 years) |
+| CR2032 | 180 mAh | **115 days** (~4 months) |
+| 2× AAA | 1,000 mAh | **637 days** (~21 months) |
+| 2× AA | 2,400 mAh | **1,529 days** (~4.2 years) |
+| 2× AA Lithium | 3,000 mAh | **1,911 days** (~5.2 years) |
 
 ### Temperature Impact
 
@@ -379,24 +395,25 @@ Battery performance degrades significantly in extreme temperatures:
 
 | Use Case | Recommended | Rationale |
 |----------|-------------|-----------|
-| **Motorcycle (Weekend)** | 2× AAA | Compact, 2+ years life |
-| **Daily Commuter** | 2× AA | Best balance of size/life (~2 years) |
-| **Delivery Vehicle** | 2× AA Lithium | Heavy use, ~8 months |
-| **Garage Queen** | 2× AA | Multi-year life, low self-discharge concern |
+| **Motorcycle (Weekend)** | 2× AAA | Compact, 5+ years (self-discharge limited) |
+| **Daily Commuter** | 2× AAA | **21 months**, compact form factor |
+| **Daily Commuter (extended)** | 2× AA | **4+ years**, best longevity |
+| **Delivery Vehicle** | 2× AA Lithium | Heavy use, ~16 months |
+| **Garage Queen** | 2× AAA | Multi-year life, compact |
 | **Extreme Cold Climate** | 2× AA Lithium | Maintains capacity at low temps |
-| **Compact Installation** | CR2032 | Small size, replace every 2-9 months |
+| **Compact Installation** | CR2032 | Small size, replace every 4-24 months |
 
 ### Quick Reference: Months Until Replacement
 
 |  | CR2032 | 2× AAA | 2× AA | 2× AA Li |
 |--|--------|--------|-------|----------|
-| **Parked** | 9 mo | 48 mo | 48 mo* | 48 mo* |
-| **Weekend** | 5 mo | 29 mo | 48 mo* | 48 mo* |
-| **Commuter** | 2 mo | 10 mo | 24 mo | 30 mo |
-| **Daily** | 1 mo | 7 mo | 16 mo | 20 mo |
-| **Heavy** | 0.5 mo | 3 mo | 6 mo | 8 mo |
+| **Parked** | 24 mo | 60 mo* | 60 mo* | 60 mo* |
+| **Weekend** | 12 mo | 60 mo* | 60 mo* | 60 mo* |
+| **Commuter** | 4 mo | **21 mo** | 50 mo | 63 mo |
+| **Daily** | 2.5 mo | 14 mo | 34 mo | 42 mo |
+| **Heavy** | 1 mo | 5.4 mo | 13 mo | 16 mo |
 
-*Limited by battery self-discharge, not device consumption
+*Limited by battery self-discharge (~5-7 years for alkaline, ~10 years for lithium), not device consumption
 
 ## Enabled Zephyr Subsystems
 

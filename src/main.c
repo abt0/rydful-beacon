@@ -23,7 +23,7 @@
 LOG_MODULE_REGISTER(ble_beacon, LOG_LEVEL_INF);
 
 /* Motion detection - fully hardware-driven */
-#define NO_MOTION_TIMEOUT_SEC     60      /* Stop advertising after no motion for this long */
+#define NO_MOTION_TIMEOUT_SEC     30      /* Stop advertising after no motion for this long */
 
 /* Gravity sanity check bounds for diagnostics (m/s²) - squared for comparison */
 #define GRAVITY_MIN_MS2_SQ        25.0f   /* (5.0)^2 */
@@ -118,7 +118,7 @@ static inline void set_led(int state)
 #define ADV_LOG_INTERVAL_SEC  10  /* Log advertising status every N seconds */
 
 /* Battery monitoring configuration (2x AA alkaline batteries) */
-#define BATTERY_UPDATE_INTERVAL_SEC  30  /* Update battery in advertising every 30 sec */
+#define BATTERY_UPDATE_INTERVAL_SEC  300  /* Update battery in advertising every 5 min */
 #define BATTERY_LOW_THRESHOLD_MV     2000 /* Low battery warning threshold (mV) - 0% */
 #define BATTERY_FULL_MV              3000 /* Full battery threshold (mV) - 100% */
 
@@ -182,8 +182,8 @@ static struct bt_data sd[] = {
 };
 
 /*
- * Connectable, scannable advertising with slow interval for power savings.
- * Test with your companion app to verify discovery time is acceptable.
+ * Connectable, scannable advertising for Android CDM compatibility.
+ * Advertising interval kept at 250-400ms for reliable discovery.
  */
 static struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
 	BT_LE_ADV_OPT_CONN | BT_LE_ADV_OPT_SCANNABLE,
@@ -539,8 +539,8 @@ static int configure_hardware_motion_mode(void)
 
 	LOG_INF("Configuring hardware motion detection mode...");
 
-	/* Configure CTRL_REG1: 10Hz ODR (needed for interrupt engine), low-power, XYZ enabled */
-	reg_val = LIS2DH_ODR_10HZ | LIS2DH_LPEN | LIS2DH_XYZ_EN;
+	/* Configure CTRL_REG1: 1Hz ODR (lowest power), low-power mode, XYZ enabled */
+	reg_val = LIS2DH_ODR_1HZ | LIS2DH_LPEN | LIS2DH_XYZ_EN;
 	ret = i2c_reg_write_byte(i2c_dev, LIS3DH_I2C_ADDR, LIS2DH_REG_CTRL_REG1, reg_val);
 	if (ret < 0) {
 		LOG_ERR("Failed to write CTRL_REG1: %d", ret);
@@ -836,9 +836,9 @@ static void process_battery_update(int64_t now)
  * Main application loop - fully hardware-driven motion detection.
  *
  * Simple state machine:
- * - Sleep: Wait for hardware motion interrupt
- * - Active: Advertising, reset timeout on each motion interrupt
- * - Timeout: No motion for 60s -> back to sleep
+ * - Sleep: Wait for hardware motion interrupt (~1s latency at 1Hz ODR)
+ * - Active: BLE advertising, reset timeout on each motion interrupt
+ * - Timeout: No motion for 30s -> back to sleep
  */
 static void run_main_loop(void)
 {
