@@ -5,7 +5,7 @@
  *   SDA -> P0.26
  *   SCL -> P0.27
  *   CS  -> VDD (I2C mode)
- *   INT1 -> P0.02
+ *   INT1 -> P0.02 (data-ready interrupt)
  */
 
 &pinctrl {
@@ -26,16 +26,19 @@
 };
 
 &i2c0 {
+    compatible = "nordic,nrf-twim";
     status = "okay";
     pinctrl-0 = <&i2c0_default_alt>;
     pinctrl-1 = <&i2c0_sleep_alt>;
     pinctrl-names = "default", "sleep";
+    clock-frequency = <I2C_BITRATE_STANDARD>;
 
     lis3dh: lis3dh@19 {
         /* Use "st,lis2dh" not "st,lis3dh" - Zephyr's LIS2DH driver handles
          * both LIS2DH and LIS3DH chips but requires the lis2dh compatible. */
         compatible = "st,lis2dh";
         reg = <0x19>;
+        /* INT1 for direct GPIO interrupt (bypasses broken Zephyr trigger API) */
         irq-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
         status = "okay";
     };
@@ -44,4 +47,20 @@
 /* Disable FICR to prevent conflicts with bootloader/softdevice */
 &ficr {
     status = "disabled";
+};
+
+/* Enable ADC for battery voltage measurement */
+&adc {
+    status = "okay";
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    channel@0 {
+        reg = <0>;
+        zephyr,gain = "ADC_GAIN_1_6";
+        zephyr,reference = "ADC_REF_INTERNAL";
+        zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+        zephyr,input-positive = <NRF_SAADC_VDD>;
+        zephyr,resolution = <12>;
+    };
 };

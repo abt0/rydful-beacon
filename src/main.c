@@ -21,13 +21,16 @@
 LOG_MODULE_REGISTER(ble_beacon, LOG_LEVEL_INF);
 
 /* Motion detection configuration for car movement */
-/* Using squared thresholds to avoid expensive sqrt operations */
-#define MOTION_THRESHOLD_MS2_SQ   0.0625f /* (0.25)^2 - Threshold for sudden changes */
-#define VARIANCE_THRESHOLD        0.01f   /* Variance threshold for detecting road vibrations */
-#define MIN_MOTION_HITS           3       /* Require multiple hits to confirm motion */
-#define VARIANCE_WINDOW_SIZE      16      /* Number of samples for variance calculation */
+/* Note: At 1Hz ODR, each sample is 1 second apart - thresholds tuned for sensitivity */
+#define MOTION_THRESHOLD          1.0f    /* Absolute delta threshold (after EMA filtering) */
+#define NOISE_DEADBAND            0.9f    /* Ignore deltas below this (sensor quantization noise) */
+#define VARIANCE_THRESHOLD        1.8f    /* Variance threshold for road vibrations */
+#define MIN_MOTION_HITS           5       /* Require 5 hits (5 seconds at 1Hz) */
+#define VARIANCE_WINDOW_SIZE      8       /* Number of samples for variance calculation */
+#define EMA_ALPHA                 0.3f    /* EMA smoothing factor (0.3 = moderate smoothing) */
 #define NO_MOTION_TIMEOUT_SEC     60      /* Timeout for highway cruising gaps */
 #define ACCEL_SAMPLE_INTERVAL_MS  100     /* Sampling interval when advertising (ms) */
+#define IDLE_POLL_INTERVAL_MS     2000    /* Slow polling when idle (power saving) */
 
 /* LED feedback configuration */
 #define STARTUP_BLINK_COUNT       3       /* Number of blinks on startup */
@@ -41,8 +44,42 @@ LOG_MODULE_REGISTER(ble_beacon, LOG_LEVEL_INF);
 #define ADC_REF_MV                3600    /* Full scale voltage (0.6V * 6 gain) */
 #define ADC_RESOLUTION            4096    /* 12-bit resolution */
 
+/* ========== LIS2DH Direct Register Configuration ========== */
+/* Register addresses */
+#define LIS2DH_REG_CTRL_REG1      0x20
+#define LIS2DH_REG_CTRL_REG3      0x22
+#define LIS2DH_REG_CTRL_REG4      0x23
+#define LIS2DH_REG_CTRL_REG5      0x24
+#define LIS2DH_REG_STATUS_REG     0x27
+
+/* CTRL_REG3 bits - INT1 configuration */
+#define LIS2DH_I1_DRDY1           BIT(4)  /* Data-ready interrupt on INT1 */
+#define LIS2DH_I1_AOI1            BIT(6)  /* AOI1 interrupt on INT1 */
+
+/* CTRL_REG1 bits - ODR and axis enable */
+#define LIS2DH_ODR_1HZ            (0x01 << 4)  /* 1 Hz output data rate (lowest power) */
+#define LIS2DH_ODR_10HZ           (0x02 << 4)  /* 10 Hz output data rate */
+#define LIS2DH_ODR_25HZ           (0x03 << 4)  /* 25 Hz output data rate */
+#define LIS2DH_XYZ_EN             0x07         /* Enable X, Y, Z axes */
+#define LIS2DH_LPEN               BIT(3)       /* Low-power mode enable */
+
+/* INT1 GPIO configuration */
+#define INT1_NODE DT_NODELABEL(lis3dh)
+#define INT1_GPIO_PORT DT_GPIO_CTLR_BY_IDX(DT_NODELABEL(gpio0), gpios, 0)
+
 /* LIS3DH accelerometer device */
 static const struct device *lis3dh_dev;
+
+/* INT1 GPIO for direct hardware interrupt (bypasses broken Zephyr trigger API) */
+static const struct gpio_dt_spec int1_gpio = GPIO_DT_SPEC_GET_OR(
+	DT_NODELABEL(lis3dh), irq_gpios, {0});
+static struct gpio_callback int1_cb_data;
+
+/* Semaphore for data-ready interrupt signaling */
+static K_SEM_DEFINE(data_ready_sem, 0, 1);
+
+/* Flag to track if hardware interrupt is available */
+static bool hw_interrupt_available;
 
 /* LED for visual feedback (optional - may not exist on custom boards) */
 #if DT_NODE_EXISTS(DT_ALIAS(led0))
@@ -103,7 +140,9 @@ struct motion_state {
 	float mean;           /* Running mean */
 	float m2;             /* Sum of squared differences from mean */
 	int count;            /* Number of samples */
-	float prev_mag_sq;    /* Previous magnitude squared */
+	float prev_mag_sq;    /* Previous magnitude squared (EMA filtered) */
+	float ema_mag_sq;     /* EMA filtered magnitude squared */
+	bool ema_initialized; /* Flag to initialize EMA on first sample */
 	int hit_count;        /* Debounce counter */
 };
 static struct motion_state motion = {
@@ -111,17 +150,13 @@ static struct motion_state motion = {
 	.m2 = 0.0f,
 	.count = 0,
 	.prev_mag_sq = 0.0f,
+	.ema_mag_sq = 0.0f,
+	.ema_initialized = false,
 	.hit_count = 0,
 };
 
 /* Semaphore to wait for BT ready */
 static K_SEM_DEFINE(bt_ready_sem, 0, 1);
-
-/* Semaphore to signal motion detected via interrupt */
-static K_SEM_DEFINE(motion_sem, 0, 1);
-
-/* Forward declaration for motion trigger setup */
-static int setup_motion_trigger(void);
 
 /* Custom 16-bit Service UUID for filtering (uses less space than 128-bit) */
 #define CUSTOM_SERVICE_UUID_16  0xFEAA  /* Use a 16-bit UUID */
@@ -288,36 +323,49 @@ static int init_lis3dh(void)
 
 /* ========== Battery Voltage Measurement ========== */
 
-/* ADC device and channel configuration for nRF52 VDD measurement */
-#if DT_NODE_EXISTS(DT_PATH(zephyr_user)) && DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
-#define ADC_NODE DT_PHANDLE(DT_PATH(zephyr_user), io_channels)
+/*
+ * ADC for battery voltage measurement.
+ * Note: nRF52832 does NOT support direct VDD measurement via SAADC.
+ * This feature requires either:
+ * - nRF52840/nRF54 (has NRF_SAADC_VDD input)
+ * - External voltage divider on an AIN pin
+ * For nRF52 DK without external circuitry, battery monitoring is disabled.
+ */
+#if defined(CONFIG_ADC_NRFX_SAADC) && defined(NRF_SAADC_VDD)
+#define BATTERY_ADC_SUPPORTED 1
 #else
-#define ADC_NODE DT_NODELABEL(adc)
+#define BATTERY_ADC_SUPPORTED 0
 #endif
+
+#if BATTERY_ADC_SUPPORTED
+#define ADC_NODE DT_NODELABEL(adc)
+#define ADC_CHANNEL_ID 0
+#define ADC_RESOLUTION_BITS 12
 
 static const struct device *adc_dev;
 static int16_t adc_buffer;
+static bool adc_available;
 
-static struct adc_channel_cfg channel_cfg = {
+static const struct adc_channel_cfg channel_cfg = {
 	.gain = ADC_GAIN_1_6,
 	.reference = ADC_REF_INTERNAL,
 	.acquisition_time = ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40),
-	.channel_id = 0,
-#if defined(CONFIG_ADC_NRFX_SAADC)
-	.input_positive = SAADC_CH_PSELP_PSELP_VDD,
-#endif
+	.channel_id = ADC_CHANNEL_ID,
+	.input_positive = NRF_SAADC_VDD,
 };
 
 static struct adc_sequence sequence = {
-	.channels = BIT(0),
+	.channels = BIT(ADC_CHANNEL_ID),
 	.buffer = &adc_buffer,
 	.buffer_size = sizeof(adc_buffer),
-	.resolution = 12,
+	.resolution = ADC_RESOLUTION_BITS,
 };
+#endif /* BATTERY_ADC_SUPPORTED */
 
 /* Initialize ADC for battery measurement */
 static int init_battery_adc(void)
 {
+#if BATTERY_ADC_SUPPORTED
 	adc_dev = DEVICE_DT_GET(ADC_NODE);
 	if (!device_is_ready(adc_dev)) {
 		LOG_ERR("ADC device not ready");
@@ -330,13 +378,23 @@ static int init_battery_adc(void)
 		return err;
 	}
 
+	adc_available = true;
 	LOG_INF("Battery ADC initialized");
 	return 0;
+#else
+	LOG_INF("Battery ADC not supported on this platform (nRF52832 lacks VDD input)");
+	return -ENOTSUP;
+#endif
 }
 
 /* Read battery voltage in millivolts */
 static uint16_t read_battery_voltage(void)
 {
+#if BATTERY_ADC_SUPPORTED
+	if (!adc_available) {
+		return 0;
+	}
+
 	int err = adc_read(adc_dev, &sequence);
 	if (err) {
 		LOG_ERR("ADC read failed: %d", err);
@@ -354,6 +412,9 @@ static uint16_t read_battery_voltage(void)
 	int32_t voltage_mv = (adc_buffer * ADC_REF_MV) / ADC_RESOLUTION;
 
 	return (uint16_t)voltage_mv;
+#else
+	return 0;
+#endif
 }
 
 /* Calculate battery percentage from voltage (0% at LOW_THRESHOLD, 100% at FULL) */
@@ -460,14 +521,48 @@ static inline float calculate_magnitude_sq(float x, float y, float z)
 }
 
 /*
- * Get squared delta between current and previous magnitude.
- * Returns (curr - prev)^2 to avoid sqrt and fabs.
+ * Apply EMA filter to smooth magnitude readings.
+ * EMA reduces sensor noise while maintaining responsiveness.
+ * Formula: filtered = alpha * new + (1 - alpha) * old
  */
-static float get_magnitude_delta_sq(float curr_mag_sq)
+static float apply_ema_filter(float new_mag_sq)
 {
-	float diff = curr_mag_sq - motion.prev_mag_sq;
-	motion.prev_mag_sq = curr_mag_sq;
-	return diff * diff;  /* Squared delta */
+	if (!motion.ema_initialized) {
+		motion.ema_mag_sq = new_mag_sq;
+		motion.ema_initialized = true;
+		return new_mag_sq;
+	}
+	motion.ema_mag_sq = EMA_ALPHA * new_mag_sq + (1.0f - EMA_ALPHA) * motion.ema_mag_sq;
+	return motion.ema_mag_sq;
+}
+
+/*
+ * Get absolute delta between current and previous filtered magnitude.
+ * Uses EMA filtering to smooth sensor noise, then absolute delta with deadband.
+ * Also updates variance using the filtered value (not raw) for consistency.
+ * Returns 0 if delta is below noise floor (deadband filtering).
+ */
+static float get_magnitude_delta(float curr_mag_sq)
+{
+	/* Apply EMA filter to smooth out sensor quantization noise */
+	float filtered_mag = apply_ema_filter(curr_mag_sq);
+	
+	/* Update variance using FILTERED magnitude (same data source as delta) */
+	update_variance(filtered_mag);
+	
+	/* Calculate absolute delta */
+	float diff = filtered_mag - motion.prev_mag_sq;
+	float abs_delta = (diff >= 0) ? diff : -diff;
+	
+	/* Update previous value with filtered magnitude */
+	motion.prev_mag_sq = filtered_mag;
+	
+	/* Apply deadband to filter out noise below threshold */
+	if (abs_delta < NOISE_DEADBAND) {
+		return 0.0f;
+	}
+	
+	return abs_delta;
 }
 
 /* Check for variance-based motion (highway cruising vibrations) */
@@ -480,13 +575,15 @@ static bool check_variance_motion(void)
 }
 
 /* Apply debounce filter to motion detection */
-static bool apply_debounce(bool motion_detected, float delta_sq)
+static bool apply_debounce(bool motion_detected, float delta, float variance,
+			   bool delta_trig, bool var_trig)
 {
 	if (motion_detected) {
 		motion.hit_count++;
 		if (motion.hit_count >= MIN_MOTION_HITS) {
-			LOG_INF("Motion confirmed! Delta^2: %.4f (hits: %d)",
-			        (double)delta_sq, motion.hit_count);
+			LOG_INF("Motion! d=%.2f v=%.2f [%s%s]",
+			        (double)delta, (double)variance,
+			        delta_trig ? "D" : "", var_trig ? "V" : "");
 			motion.hit_count = 0;  /* Reset after confirmed */
 			return true;
 		}
@@ -498,10 +595,10 @@ static bool apply_debounce(bool motion_detected, float delta_sq)
 
 /*
  * Detect motion using dual algorithm:
- * 1. Sudden change detection - catches starts, stops, turns
+ * 1. Sudden change detection - catches starts, stops, turns (EMA filtered + deadband)
  * 2. Variance detection - catches highway cruising (road vibrations)
  *
- * All comparisons use squared values to avoid sqrt() operations.
+ * Uses EMA filtering to smooth sensor noise and deadband to ignore quantization artifacts.
  */
 static bool detect_motion(void)
 {
@@ -511,13 +608,33 @@ static bool detect_motion(void)
 	}
 
 	float mag_sq = calculate_magnitude_sq(x, y, z);
-	update_variance(mag_sq);
+	
+	/* get_magnitude_delta applies EMA filter and also updates variance internally */
+	float delta = get_magnitude_delta(mag_sq);
+	float variance = get_variance();
+	bool delta_triggered = (delta > MOTION_THRESHOLD);
+	bool variance_triggered = check_variance_motion();
+	bool motion_detected = delta_triggered || variance_triggered;
 
-	/* Check both motion detection algorithms using squared thresholds */
-	float delta_sq = get_magnitude_delta_sq(mag_sq);
-	bool motion_detected = (delta_sq > MOTION_THRESHOLD_MS2_SQ) || check_variance_motion();
+#ifdef CONFIG_BEACON_CALIBRATION
+	/*
+	 * CALIBRATION MODE: Log all values to help tune thresholds.
+	 * Enable with CONFIG_BEACON_CALIBRATION=y in prj.conf
+	 *
+	 * How to calibrate:
+	 * 1. Enable calibration mode
+	 * 2. Place device at rest - delta should be 0 (noise filtered by deadband)
+	 * 3. Simulate your motion patterns - note the delta values
+	 * 4. Set MOTION_THRESHOLD between noise floor and motion values
+	 * 5. Adjust NOISE_DEADBAND if too many/few readings pass through
+	 */
+	LOG_INF("[CAL] d=%.2f v=%.2f mag=%.1f ema=%.1f | D:%d V:%d",
+		(double)delta, (double)variance, (double)mag_sq, (double)motion.ema_mag_sq,
+		delta_triggered, variance_triggered);
+#endif
 
-	return apply_debounce(motion_detected, delta_sq);
+	return apply_debounce(motion_detected, delta, variance,
+			      delta_triggered, variance_triggered);
 }
 
 /* Start BLE advertising */
@@ -557,6 +674,15 @@ static int stop_advertising(void)
 	ble.is_advertising = false;
 	set_led(0); /* LED OFF when sleeping */
 	LOG_INF("<<< BLE advertising STOPPED (no motion for %d seconds)", NO_MOTION_TIMEOUT_SEC);
+
+	/* Reset motion detection state for fresh start */
+	/* Note: Keep prev_mag_sq and EMA state to avoid false trigger on first sample */
+	motion.hit_count = 0;
+	motion.count = 0;
+	motion.m2 = 0.0f;
+	motion.mean = 0.0f;
+	/* motion.prev_mag_sq, ema_mag_sq, ema_initialized intentionally NOT reset */
+
 	return 0;
 }
 
@@ -580,14 +706,200 @@ static inline int64_t elapsed_seconds_since(int64_t now, int64_t since)
 	return (now - since) / 1000;
 }
 
+/* ========== Direct Hardware Interrupt Configuration ========== */
+
+/* Counter to track interrupt frequency */
+static volatile uint32_t int1_count;
+
+/* INT1 GPIO callback - called from interrupt context */
+static void int1_callback(const struct device *dev, struct gpio_callback *cb,
+			  uint32_t pins)
+{
+	ARG_UNUSED(dev);
+	ARG_UNUSED(cb);
+	ARG_UNUSED(pins);
+	int1_count++;
+	k_sem_give(&data_ready_sem);
+}
+
+/*
+ * Configure LIS2DH registers directly via I2C.
+ * This bypasses the Zephyr sensor trigger API which doesn't work properly.
+ */
+static int configure_lis2dh_interrupt(void)
+{
+	const struct device *i2c_dev = DEVICE_DT_GET(DT_BUS(DT_NODELABEL(lis3dh)));
+	uint8_t reg_val;
+	int ret;
+
+	if (!device_is_ready(i2c_dev)) {
+		LOG_ERR("I2C device not ready for direct register access");
+		return -ENODEV;
+	}
+
+	/* First, check and configure CTRL_REG1 to ensure sensor is outputting data */
+	ret = i2c_reg_read_byte(i2c_dev, LIS3DH_I2C_ADDR, LIS2DH_REG_CTRL_REG1, &reg_val);
+	if (ret < 0) {
+		LOG_ERR("Failed to read CTRL_REG1: %d", ret);
+		return ret;
+	}
+	LOG_INF("CTRL_REG1 before: 0x%02X (ODR=%d)", reg_val, (reg_val >> 4) & 0x0F);
+
+	/* Configure: 1Hz ODR, low-power mode, all axes enabled (lowest power) */
+	reg_val = LIS2DH_ODR_1HZ | LIS2DH_LPEN | LIS2DH_XYZ_EN;
+	ret = i2c_reg_write_byte(i2c_dev, LIS3DH_I2C_ADDR, LIS2DH_REG_CTRL_REG1, reg_val);
+	if (ret < 0) {
+		LOG_ERR("Failed to write CTRL_REG1: %d", ret);
+		return ret;
+	}
+
+	/* Verify CTRL_REG1 */
+	ret = i2c_reg_read_byte(i2c_dev, LIS3DH_I2C_ADDR, LIS2DH_REG_CTRL_REG1, &reg_val);
+	if (ret < 0) {
+		LOG_ERR("Failed to verify CTRL_REG1: %d", ret);
+		return ret;
+	}
+	LOG_INF("CTRL_REG1 after: 0x%02X (ODR=%d, 1Hz)", reg_val, (reg_val >> 4) & 0x0F);
+
+	/* Now configure CTRL_REG3 for data-ready interrupt on INT1 */
+	ret = i2c_reg_read_byte(i2c_dev, LIS3DH_I2C_ADDR, LIS2DH_REG_CTRL_REG3, &reg_val);
+	if (ret < 0) {
+		LOG_ERR("Failed to read CTRL_REG3: %d", ret);
+		return ret;
+	}
+	LOG_INF("CTRL_REG3 before: 0x%02X", reg_val);
+
+	/* Enable data-ready interrupt on INT1 */
+	reg_val |= LIS2DH_I1_DRDY1;
+	ret = i2c_reg_write_byte(i2c_dev, LIS3DH_I2C_ADDR, LIS2DH_REG_CTRL_REG3, reg_val);
+	if (ret < 0) {
+		LOG_ERR("Failed to write CTRL_REG3: %d", ret);
+		return ret;
+	}
+
+	/* Verify the write */
+	ret = i2c_reg_read_byte(i2c_dev, LIS3DH_I2C_ADDR, LIS2DH_REG_CTRL_REG3, &reg_val);
+	if (ret < 0) {
+		LOG_ERR("Failed to verify CTRL_REG3: %d", ret);
+		return ret;
+	}
+	LOG_INF("CTRL_REG3 after: 0x%02X (I1_DRDY1=%s)", reg_val,
+		(reg_val & LIS2DH_I1_DRDY1) ? "ON" : "OFF");
+
+	if (!(reg_val & LIS2DH_I1_DRDY1)) {
+		LOG_ERR("Failed to enable I1_DRDY1 bit!");
+		return -EIO;
+	}
+
+	/* Read STATUS_REG to verify sensor is producing data */
+	ret = i2c_reg_read_byte(i2c_dev, LIS3DH_I2C_ADDR, LIS2DH_REG_STATUS_REG, &reg_val);
+	if (ret < 0) {
+		LOG_WRN("Failed to read STATUS_REG: %d", ret);
+	} else {
+		LOG_INF("STATUS_REG: 0x%02X (ZYXDA=%d)", reg_val, (reg_val >> 3) & 1);
+	}
+
+	return 0;
+}
+
+/*
+ * Setup GPIO interrupt on INT1 pin.
+ * This catches the hardware interrupt directly.
+ */
+static int setup_int1_gpio_interrupt(void)
+{
+	int ret;
+
+	if (!gpio_is_ready_dt(&int1_gpio)) {
+		LOG_ERR("INT1 GPIO device not ready");
+		return -ENODEV;
+	}
+
+	/* Configure as input with interrupt on rising edge */
+	ret = gpio_pin_configure_dt(&int1_gpio, GPIO_INPUT);
+	if (ret < 0) {
+		LOG_ERR("Failed to configure INT1 pin: %d", ret);
+		return ret;
+	}
+
+	ret = gpio_pin_interrupt_configure_dt(&int1_gpio, GPIO_INT_EDGE_TO_ACTIVE);
+	if (ret < 0) {
+		LOG_ERR("Failed to configure INT1 interrupt: %d", ret);
+		return ret;
+	}
+
+	/* Setup callback */
+	gpio_init_callback(&int1_cb_data, int1_callback, BIT(int1_gpio.pin));
+	ret = gpio_add_callback(int1_gpio.port, &int1_cb_data);
+	if (ret < 0) {
+		LOG_ERR("Failed to add INT1 callback: %d", ret);
+		return ret;
+	}
+
+	/* Check current INT1 state */
+	int pin_state = gpio_pin_get_dt(&int1_gpio);
+	LOG_INF("INT1 GPIO configured on pin %d, current state: %d", int1_gpio.pin, pin_state);
+
+	/*
+	 * If INT1 is already HIGH, we need to clear it by reading the data.
+	 * Otherwise we'll miss the first rising edge since we're edge-triggered.
+	 */
+	if (pin_state == 1) {
+		LOG_INF("INT1 already high - clearing by reading sensor data...");
+		/* Reading data clears the DRDY flag and lowers INT1 */
+		int err = sensor_sample_fetch(lis3dh_dev);
+		if (err) {
+			LOG_WRN("Failed to clear pending data: %d", err);
+		}
+		k_msleep(10); /* Small delay for INT1 to settle */
+		pin_state = gpio_pin_get_dt(&int1_gpio);
+		LOG_INF("INT1 state after clearing: %d", pin_state);
+	}
+
+	return 0;
+}
+
+/*
+ * Setup complete hardware interrupt chain:
+ * 1. Configure LIS2DH to generate DRDY on INT1
+ * 2. Configure nRF52 GPIO to catch INT1 rising edge
+ */
+static int setup_hardware_interrupt(void)
+{
+	int ret;
+
+	/* Check if INT1 GPIO is available in device tree */
+	if (!int1_gpio.port) {
+		LOG_WRN("INT1 GPIO not configured in device tree");
+		return -ENODEV;
+	}
+
+	/* Configure LIS2DH registers directly */
+	ret = configure_lis2dh_interrupt();
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* Setup GPIO interrupt */
+	ret = setup_int1_gpio_interrupt();
+	if (ret < 0) {
+		return ret;
+	}
+
+	LOG_INF("Hardware interrupt chain configured successfully");
+	return 0;
+}
+
 /* Print startup banner with configuration */
 static void print_startup_banner(void)
 {
 	LOG_INF("==========================================");
 	LOG_INF("  Motion-Triggered BLE Beacon");
 	LOG_INF("==========================================");
-	LOG_INF("Sudden change threshold^2: %.4f", (double)MOTION_THRESHOLD_MS2_SQ);
-	LOG_INF("Variance threshold: %.4f", (double)VARIANCE_THRESHOLD);
+	LOG_INF("Motion threshold: %.2f", (double)MOTION_THRESHOLD);
+	LOG_INF("Noise deadband: %.2f", (double)NOISE_DEADBAND);
+	LOG_INF("EMA alpha: %.2f", (double)EMA_ALPHA);
+	LOG_INF("Variance threshold: %.2f", (double)VARIANCE_THRESHOLD);
 	LOG_INF("Min motion hits: %d (debounce)", MIN_MOTION_HITS);
 	LOG_INF("Sample interval: %d ms", ACCEL_SAMPLE_INTERVAL_MS);
 	LOG_INF("No-motion timeout: %d seconds", NO_MOTION_TIMEOUT_SEC);
@@ -640,10 +952,15 @@ static int init_peripherals(void)
 		update_battery_status();
 	}
 
-	/* Setup motion trigger for interrupt-driven wake */
-	err = setup_motion_trigger();
+	/* Setup hardware interrupt for low-power data-ready wake */
+	LOG_INF("Configuring hardware interrupt...");
+	err = setup_hardware_interrupt();
 	if (err) {
-		LOG_WRN("Motion trigger setup failed: %d - falling back to polling", err);
+		LOG_WRN("Hardware interrupt setup failed: %d - falling back to polling", err);
+		hw_interrupt_available = false;
+	} else {
+		hw_interrupt_available = true;
+		LOG_INF("Hardware interrupt enabled (true low-power mode)");
 	}
 
 	return 0;
@@ -707,68 +1024,34 @@ static void process_battery_update(int64_t now)
 	}
 }
 
-/* Accelerometer trigger callback - called from interrupt context */
-static void accel_trigger_handler(const struct device *dev,
-				   const struct sensor_trigger *trig)
-{
-	ARG_UNUSED(dev);
-	ARG_UNUSED(trig);
-	/* Signal main thread that motion was detected */
-	k_sem_give(&motion_sem);
-}
-
-/* Setup accelerometer motion trigger with hardware threshold */
-static int setup_motion_trigger(void)
-{
-	int err;
-
-	/*
-	 * Configure the motion detection threshold on the LIS3DH.
-	 * SENSOR_ATTR_SLOPE_TH sets the threshold for the high-pass filtered
-	 * acceleration data. When any axis exceeds this threshold, INT1 fires.
-	 * Value is in m/s² - we use a low threshold to detect car engine vibrations.
-	 */
-	struct sensor_value threshold = {
-		.val1 = 0,       /* Integer part: 0 m/s² */
-		.val2 = 500000,  /* Fractional part: 0.5 m/s² threshold */
-	};
-
-	err = sensor_attr_set(lis3dh_dev, SENSOR_CHAN_ACCEL_XYZ,
-			      SENSOR_ATTR_SLOPE_TH, &threshold);
-	if (err) {
-		LOG_WRN("Failed to set motion threshold: %d (using driver default)", err);
-		/* Continue anyway - driver may have a reasonable default */
-	} else {
-		LOG_INF("Motion threshold set to 0.5 m/s²");
-	}
-
-	/*
-	 * Configure the trigger to fire on acceleration delta (motion).
-	 * The LIS3DH driver maps this to INT1 with high-pass filter enabled.
-	 */
-	struct sensor_trigger trig = {
-		.type = SENSOR_TRIG_DELTA,
-		.chan = SENSOR_CHAN_ACCEL_XYZ,
-	};
-
-	err = sensor_trigger_set(lis3dh_dev, &trig, accel_trigger_handler);
-	if (err) {
-		LOG_ERR("Failed to set motion trigger: %d", err);
-		return err;
-	}
-
-	LOG_INF("Motion trigger configured (interrupt-driven via INT1)");
-	return 0;
-}
-
-/* Main application loop - interrupt-driven for low power */
+/* Main application loop */
 static void run_main_loop(void)
 {
 	/* Start in sleep mode - NOT advertising */
 	set_led(0);  /* Ensure LED is OFF */
-	LOG_INF("Entering low-power mode - waiting for motion interrupt...");
+
+	if (hw_interrupt_available) {
+		LOG_INF("Using hardware interrupt (true low-power mode)");
+		/* Clear any pending interrupts from initialization */
+		k_sem_reset(&data_ready_sem);
+	} else {
+		LOG_INF("Using polling for motion detection (fallback)");
+		LOG_INF("Idle poll interval: %d ms", IDLE_POLL_INTERVAL_MS);
+	}
 	LOG_INF("(Move the device to start BLE advertising)");
 	LOG_INF("BLE is OFF - device should NOT be discoverable");
+
+	/* Initialize EMA filter and prev_mag_sq with first reading to avoid startup spike */
+	{
+		float x, y, z;
+		if (fetch_acceleration(&x, &y, &z) == 0) {
+			float mag_sq = calculate_magnitude_sq(x, y, z);
+			motion.ema_mag_sq = mag_sq;
+			motion.prev_mag_sq = mag_sq;
+			motion.ema_initialized = true;
+			LOG_INF("Initial magnitude^2: %.1f (EMA initialized)", (double)mag_sq);
+		}
+	}
 
 	/* Initialize motion time (set to past so we don't immediately timeout) */
 	ble.last_motion_time = 0;
@@ -777,25 +1060,49 @@ static void run_main_loop(void)
 		if (ble.is_advertising) {
 			int64_t now = k_uptime_get();
 
-			/* When advertising, poll for continued motion and variance */
+			/*
+			 * When advertising, use interrupt if available.
+			 * Wait for data-ready with timeout to ensure we process timeouts.
+			 */
+			if (hw_interrupt_available) {
+				k_sem_take(&data_ready_sem, K_MSEC(200));
+			}
+
 			if (detect_motion()) {
 				ble.last_motion_time = now;
 			}
 			process_advertising_state(now);
 			process_battery_update(now);
-			k_msleep(ACCEL_SAMPLE_INTERVAL_MS);
+
+			if (!hw_interrupt_available) {
+				k_msleep(ACCEL_SAMPLE_INTERVAL_MS);
+			}
+		} else if (hw_interrupt_available) {
+			/*
+			 * TRUE LOW POWER MODE:
+			 * Wait indefinitely for hardware data-ready interrupt.
+			 * nRF52 enters System ON sleep (~1.9uA).
+			 * LIS2DH @ 1Hz generates interrupt every 1 second (~2uA).
+			 * Total idle: ~10uA average.
+			 */
+			k_sem_take(&data_ready_sem, K_FOREVER);
+
+			if (detect_motion()) {
+				LOG_INF("Motion detected (HW interrupt) - waking up!");
+				ble.last_motion_time = k_uptime_get();
+				start_advertising();
+			}
 		} else {
 			/*
-			 * When idle, wait indefinitely for motion interrupt.
-			 * CPU enters deep sleep here - lowest power consumption.
-			 * No periodic wake-ups, no battery polling when parked.
+			 * Polling fallback when interrupt unavailable.
+			 * Check for motion every 2 seconds.
 			 */
-			k_sem_take(&motion_sem, K_FOREVER);
-
-			/* Motion interrupt received - wake up and start advertising */
-			LOG_INF("Motion interrupt received - waking up!");
-			ble.last_motion_time = k_uptime_get();
-			start_advertising();
+			if (detect_motion()) {
+				LOG_INF("Motion detected (polling) - waking up!");
+				ble.last_motion_time = k_uptime_get();
+				start_advertising();
+			}
+			k_msleep(IDLE_POLL_INTERVAL_MS);
 		}
 	}
 }
