@@ -221,17 +221,182 @@ Motion detected - waking up!
 
 ## Power Consumption
 
+### Current Draw by State
+
 | State | Current | Description |
 |-------|---------|-------------|
-| Sleep | ~13 µA | nRF52 System ON + LIS3DH @ 10Hz |
-| Active (advertising) | ~1-3 mA avg | BLE advertising + occasional motion interrupts |
+| Sleep | ~13 µA | nRF52 System ON (~1.9µA) + LIS3DH @ 10Hz low-power (~11µA) |
+| Active (advertising) | ~1.5 mA avg | BLE advertising @ 250-400ms + battery ADC sampling |
+| Peak (TX burst) | ~8-10 mA | During BLE transmit events (~1-3ms per event) |
 
-### Battery Life Estimate (2x AA batteries @ 2500 mAh)
+### Component Breakdown (Sleep Mode)
 
-| Usage Pattern | Estimated Life |
-|---------------|----------------|
-| Mostly idle (parked car) | ~1.5-2 years |
-| Active 8 hours/day | ~6-12 months |
+| Component | Current | Notes |
+|-----------|---------|-------|
+| nRF52832 System ON | ~1.9 µA | RAM retained, RTC running |
+| LIS3DH @ 10Hz LP mode | ~6-11 µA | Interrupt engine active, high-pass filter |
+| GPIO leakage | <0.1 µA | Negligible with proper configuration |
+| **Total Sleep** | **~10-13 µA** | Conservative estimate: 13µA |
+
+### Component Breakdown (Active Mode)
+
+| Component | Current | Notes |
+|-----------|---------|-------|
+| BLE advertising | ~0.5-1.5 mA | 250-400ms interval, connectable/scannable |
+| LIS3DH motion monitoring | ~11 µA | Same as sleep, always running |
+| ADC sampling (periodic) | ~0.3 mA | Brief spikes every 30 seconds |
+| CPU overhead | ~0.1-0.3 mA | Processing interrupts, state management |
+| **Total Active** | **~1.0-2.0 mA** | Conservative estimate: 1.5mA |
+
+---
+
+## Battery Life Calculations
+
+### Supported Power Sources
+
+| Battery Type | Nominal Voltage | Typical Capacity | Effective Capacity* |
+|--------------|-----------------|------------------|---------------------|
+| CR2032 | 3.0V | 225 mAh | ~180 mAh |
+| 2× AAA Alkaline | 3.0V (1.5V × 2) | 1,200 mAh | ~1,000 mAh |
+| 2× AA Alkaline | 3.0V (1.5V × 2) | 2,850 mAh | ~2,400 mAh |
+| 2× AA Lithium | 3.0V (1.5V × 2) | 3,500 mAh | ~3,000 mAh |
+
+*Effective capacity accounts for ~15-20% derating due to voltage cutoff (2.0V minimum), temperature, and discharge curve.
+
+### Usage Pattern Definitions
+
+| Pattern | Description | Daily Active Time | Trips/Day |
+|---------|-------------|-------------------|-----------|
+| **Parked Vehicle** | Garaged/parked, minimal vibration | ~5-15 min | 0-1 |
+| **Weekend Rider** | Motorcycle/classic car, weekend use only | ~2-4 hours | 1-2 (weekends only) |
+| **Commuter** | Daily work commute, 2× per day ~1h each | ~2-2.5 hours | 2 |
+| **Daily Driver** | Multiple short trips throughout day | ~3-4 hours | 4-6 |
+| **Heavy Use** | Delivery/rideshare, constant use | ~8-12 hours | 10-20 |
+
+### Battery Life Formula
+
+```
+Total Daily Consumption (mAh/day) = (I_sleep × T_sleep) + (I_active × T_active)
+
+Where:
+  I_sleep  = 0.013 mA (13 µA)
+  I_active = 1.5 mA (conservative average)
+  T_sleep  = 24 - T_active (hours)
+  T_active = Active hours per day + (trips × timeout / 3600)
+  timeout  = 60 seconds (advertising continues after last motion)
+
+Battery Life (days) = Effective_Capacity / Daily_Consumption
+```
+
+### Detailed Lifetime Estimates
+
+#### CR2032 (180 mAh effective)
+
+| Usage Pattern | Active Hours/Day | Daily Draw (mAh) | Estimated Life |
+|---------------|------------------|------------------|----------------|
+| Parked Vehicle | 0.25h | 0.69 | **261 days** (~9 months) |
+| Weekend Rider | 0.57h (avg)* | 1.14 | **158 days** (~5 months) |
+| Commuter (2×/day) | 2.03h | 3.33 | **54 days** (~2 months) |
+| Daily Driver | 3.1h | 4.95 | **36 days** (~5 weeks) |
+| Heavy Use | 8h | 12.27 | **15 days** (~2 weeks) |
+
+*Weekend rider averaged: (4h × 2 days + 0h × 5 days) / 7 = 1.14h/day
+
+#### 2× AAA Alkaline (1,000 mAh effective)
+
+| Usage Pattern | Active Hours/Day | Daily Draw (mAh) | Estimated Life |
+|---------------|------------------|------------------|----------------|
+| Parked Vehicle | 0.25h | 0.69 | **1,449 days** (~4 years) |
+| Weekend Rider | 0.57h (avg) | 1.14 | **877 days** (~2.4 years) |
+| Commuter (2×/day) | 2.03h | 3.33 | **300 days** (~10 months) |
+| Daily Driver | 3.1h | 4.95 | **202 days** (~7 months) |
+| Heavy Use | 8h | 12.27 | **82 days** (~3 months) |
+
+#### 2× AA Alkaline (2,400 mAh effective)
+
+| Usage Pattern | Active Hours/Day | Daily Draw (mAh) | Estimated Life |
+|---------------|------------------|------------------|----------------|
+| Parked Vehicle | 0.25h | 0.69 | **3,478 days** (~9.5 years)† |
+| Weekend Rider | 0.57h (avg) | 1.14 | **2,105 days** (~5.8 years)† |
+| Commuter (2×/day) | 2.03h | 3.33 | **721 days** (~2 years) |
+| Daily Driver | 3.1h | 4.95 | **485 days** (~1.3 years) |
+| Heavy Use | 8h | 12.27 | **196 days** (~6 months) |
+
+†Note: Alkaline batteries self-discharge ~2-3% per year. Actual life limited to ~5-7 years maximum regardless of load.
+
+#### 2× AA Lithium (3,000 mAh effective)
+
+| Usage Pattern | Active Hours/Day | Daily Draw (mAh) | Estimated Life |
+|---------------|------------------|------------------|----------------|
+| Parked Vehicle | 0.25h | 0.69 | **4,348 days** (~12 years)† |
+| Weekend Rider | 0.57h (avg) | 1.14 | **2,632 days** (~7 years)† |
+| Commuter (2×/day) | 2.03h | 3.33 | **901 days** (~2.5 years) |
+| Daily Driver | 3.1h | 4.95 | **606 days** (~1.7 years) |
+| Heavy Use | 8h | 12.27 | **245 days** (~8 months) |
+
+†Lithium batteries have ~1% annual self-discharge, supporting longer shelf life. Practical limit ~10 years.
+
+### Commuter Scenario Deep Dive (2× daily, ~1h each)
+
+This is a common use case: daily work commute with two trips.
+
+**Calculation breakdown:**
+- Morning commute: 1 hour active
+- Evening commute: 1 hour active  
+- Post-trip timeout: 60 seconds × 2 trips = 2 minutes
+- **Total active time**: 2h 2min/day ≈ 2.03 hours
+
+**Daily energy consumption:**
+```
+Sleep:   (24 - 2.03)h × 0.013mA = 0.286 mAh
+Active:  2.03h × 1.5mA           = 3.045 mAh
+─────────────────────────────────────────────
+Total:                           = 3.33 mAh/day
+```
+
+| Battery Type | Capacity | Estimated Life |
+|--------------|----------|----------------|
+| CR2032 | 180 mAh | **54 days** (~2 months) |
+| 2× AAA | 1,000 mAh | **300 days** (~10 months) |
+| 2× AA | 2,400 mAh | **721 days** (~2 years) |
+| 2× AA Lithium | 3,000 mAh | **901 days** (~2.5 years) |
+
+### Temperature Impact
+
+Battery performance degrades significantly in extreme temperatures:
+
+| Temperature | Capacity Factor | Notes |
+|-------------|-----------------|-------|
+| -20°C to -10°C | 50-70% | Severe cold reduces capacity |
+| -10°C to 0°C | 70-85% | Cold weather impact |
+| 0°C to 25°C | 85-100% | Optimal operating range |
+| 25°C to 45°C | 90-100% | Warm, generally fine |
+| >45°C | Reduced lifespan | Accelerated self-discharge |
+
+**Recommendation**: For vehicles parked outdoors in extreme climates, use **lithium primary cells** (2× AA Lithium) which maintain 90%+ capacity down to -40°C.
+
+### Battery Selection Guide
+
+| Use Case | Recommended | Rationale |
+|----------|-------------|-----------|
+| **Motorcycle (Weekend)** | 2× AAA | Compact, 2+ years life |
+| **Daily Commuter** | 2× AA | Best balance of size/life (~2 years) |
+| **Delivery Vehicle** | 2× AA Lithium | Heavy use, ~8 months |
+| **Garage Queen** | 2× AA | Multi-year life, low self-discharge concern |
+| **Extreme Cold Climate** | 2× AA Lithium | Maintains capacity at low temps |
+| **Compact Installation** | CR2032 | Small size, replace every 2-9 months |
+
+### Quick Reference: Months Until Replacement
+
+|  | CR2032 | 2× AAA | 2× AA | 2× AA Li |
+|--|--------|--------|-------|----------|
+| **Parked** | 9 mo | 48 mo | 48 mo* | 48 mo* |
+| **Weekend** | 5 mo | 29 mo | 48 mo* | 48 mo* |
+| **Commuter** | 2 mo | 10 mo | 24 mo | 30 mo |
+| **Daily** | 1 mo | 7 mo | 16 mo | 20 mo |
+| **Heavy** | 0.5 mo | 3 mo | 6 mo | 8 mo |
+
+*Limited by battery self-discharge, not device consumption
 
 ## Enabled Zephyr Subsystems
 
