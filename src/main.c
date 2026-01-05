@@ -352,7 +352,7 @@ static const struct adc_channel_cfg channel_cfg = {
 	.reference = ADC_REF_INTERNAL,
 	.acquisition_time = ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40),
 	.channel_id = ADC_CHANNEL_ID,
-	.input_positive = NRF_SAADC_AIN1,  /* P0.03 - connected to battery+ */
+	.input_positive = NRF_SAADC_INPUT_AIN1,  /* P0.03 - connected to battery+ */
 };
 
 static struct adc_sequence sequence = {
