@@ -49,7 +49,14 @@
     status = "disabled";
 };
 
-/* Enable ADC for battery voltage measurement */
+/*
+ * ADC for battery voltage measurement
+ *
+ * Using AIN1 (P0.03) to measure 2x AA alkaline battery voltage directly.
+ * No voltage divider needed since max voltage (3.0V) is within ADC range (3.6V with 1/6 gain).
+ *
+ * Wiring: Connect battery positive to P0.03
+ */
 &adc {
     status = "okay";
     #address-cells = <1>;
@@ -60,7 +67,7 @@
         zephyr,gain = "ADC_GAIN_1_6";
         zephyr,reference = "ADC_REF_INTERNAL";
         zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
-        zephyr,input-positive = <NRF_SAADC_VDD>;
+        zephyr,input-positive = <NRF_SAADC_AIN1>;  /* P0.03 */
         zephyr,resolution = <12>;
     };
 };

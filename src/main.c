@@ -18,6 +18,10 @@
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/logging/log.h>
 
+#ifdef CONFIG_ADC_NRFX_SAADC
+#include <hal/nrf_saadc.h>
+#endif
+
 LOG_MODULE_REGISTER(ble_beacon, LOG_LEVEL_INF);
 
 /* Motion detection configuration for car movement */
@@ -102,9 +106,9 @@ static inline void set_led(int state)
 /* BLE advertising configuration */
 #define ADV_LOG_INTERVAL_SEC  10  /* Log advertising status every N seconds */
 
-/* Battery monitoring configuration */
+/* Battery monitoring configuration (2x AA alkaline batteries) */
 #define BATTERY_UPDATE_INTERVAL_SEC  30  /* Update battery in advertising every 30 sec */
-#define BATTERY_LOW_THRESHOLD_MV     2200 /* Low battery warning threshold (mV) - 0% */
+#define BATTERY_LOW_THRESHOLD_MV     2000 /* Low battery warning threshold (mV) - 0% */
 #define BATTERY_FULL_MV              3000 /* Full battery threshold (mV) - 100% */
 
 /* ========== State Structures ========== */
@@ -324,14 +328,11 @@ static int init_lis3dh(void)
 /* ========== Battery Voltage Measurement ========== */
 
 /*
- * ADC for battery voltage measurement.
- * Note: nRF52832 does NOT support direct VDD measurement via SAADC.
- * This feature requires either:
- * - nRF52840/nRF54 (has NRF_SAADC_VDD input)
- * - External voltage divider on an AIN pin
- * For nRF52 DK without external circuitry, battery monitoring is disabled.
+ * ADC for battery voltage measurement using AIN1 (P0.03).
+ * Measures 2x AA alkaline battery voltage directly (no voltage divider needed).
+ * Voltage range: 1.8V (dead) to 3.0V (fresh), within ADC's 3.6V max.
  */
-#if defined(CONFIG_ADC_NRFX_SAADC) && defined(NRF_SAADC_VDD)
+#if defined(CONFIG_ADC)
 #define BATTERY_ADC_SUPPORTED 1
 #else
 #define BATTERY_ADC_SUPPORTED 0
@@ -351,7 +352,7 @@ static const struct adc_channel_cfg channel_cfg = {
 	.reference = ADC_REF_INTERNAL,
 	.acquisition_time = ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40),
 	.channel_id = ADC_CHANNEL_ID,
-	.input_positive = NRF_SAADC_VDD,
+	.input_positive = NRF_SAADC_AIN1,  /* P0.03 - connected to battery+ */
 };
 
 static struct adc_sequence sequence = {
@@ -379,10 +380,10 @@ static int init_battery_adc(void)
 	}
 
 	adc_available = true;
-	LOG_INF("Battery ADC initialized");
+	LOG_INF("Battery ADC initialized (AIN1/P0.03)");
 	return 0;
 #else
-	LOG_INF("Battery ADC not supported on this platform (nRF52832 lacks VDD input)");
+	LOG_INF("Battery ADC not enabled - enable CONFIG_ADC in prj.conf");
 	return -ENOTSUP;
 #endif
 }
@@ -945,7 +946,9 @@ static int init_peripherals(void)
 	/* Initialize battery ADC */
 	LOG_INF("Initializing battery monitor...");
 	err = init_battery_adc();
-	if (err) {
+	if (err == -ENOTSUP) {
+		LOG_INF("Battery ADC not enabled in build config");
+	} else if (err) {
 		LOG_WRN("Battery ADC init failed: %d - continuing without battery monitoring", err);
 	} else {
 		/* Initial battery reading */
@@ -1017,11 +1020,15 @@ static void process_advertising_state(int64_t now)
 /* Process periodic battery updates */
 static void process_battery_update(int64_t now)
 {
+#if BATTERY_ADC_SUPPORTED
 	int64_t elapsed = elapsed_seconds_since(now, battery.last_update);
 	if (elapsed >= BATTERY_UPDATE_INTERVAL_SEC) {
 		update_battery_status();
 		battery.last_update = now;
 	}
+#else
+	ARG_UNUSED(now);
+#endif
 }
 
 /* Main application loop */
