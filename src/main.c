@@ -4,9 +4,7 @@
  * - Starts in sleep mode (no BLE advertising)
  * - Detects motion via accelerometer
  * - Starts BLE advertising when motion detected
- * - Stops advertising after 10 seconds of no motion
- *
- * SPDX-License-Identifier: Apache-2.0
+ * - Stops advertising after NO_MOTION_TIMEOUT_SEC of no motion
  */
 
 #include <zephyr/kernel.h>
@@ -28,17 +26,11 @@ LOG_MODULE_REGISTER(ble_beacon, LOG_LEVEL_INF);
 /* Note: At 1Hz ODR, each sample is 1 second apart - thresholds tuned for sensitivity */
 #define MOTION_THRESHOLD          1.0f    /* Absolute delta threshold (after EMA filtering) */
 #define NOISE_DEADBAND            0.9f    /* Ignore deltas below this (sensor quantization noise) */
-#define VARIANCE_THRESHOLD        3.0f    /* Variance threshold for road vibrations */
+#define VARIANCE_THRESHOLD        1.0f    /* Variance threshold for road vibrations */
 #define MIN_MOTION_HITS           5       /* Require 5 hits (5 seconds at 1Hz) */
 #define VARIANCE_WINDOW_SIZE      8       /* Number of samples for variance calculation */
 #define EMA_ALPHA                 0.3f    /* EMA smoothing factor (0.3 = moderate smoothing) */
 #define NO_MOTION_TIMEOUT_SEC     60      /* Timeout for highway cruising gaps */
-#define ACCEL_SAMPLE_INTERVAL_MS  100     /* Sampling interval when advertising (ms) */
-#define IDLE_POLL_INTERVAL_MS     2000    /* Slow polling when idle (power saving) */
-
-/* LED feedback configuration */
-#define STARTUP_BLINK_COUNT       3       /* Number of blinks on startup */
-#define STARTUP_BLINK_MS          100     /* Duration of each startup blink (ms) */
 
 /* Gravity sanity check bounds (m/s²) - squared for comparison */
 #define GRAVITY_MIN_MS2_SQ        25.0f   /* (5.0)^2 */
@@ -81,9 +73,6 @@ static struct gpio_callback int1_cb_data;
 
 /* Semaphore for data-ready interrupt signaling */
 static K_SEM_DEFINE(data_ready_sem, 0, 1);
-
-/* Flag to track if hardware interrupt is available */
-static bool hw_interrupt_available;
 
 /* LED for visual feedback (optional - may not exist on custom boards) */
 #if DT_NODE_EXISTS(DT_ALIAS(led0))
@@ -192,14 +181,12 @@ static struct bt_data sd[] = {
 
 /*
  * Connectable, scannable advertising with slow interval for power savings.
- * 1000-1500ms interval reduces BLE TX power by ~50% vs fast interval.
- * Still compatible with Android Companion Device Manager (CDM).
  * Test with your companion app to verify discovery time is acceptable.
  */
 static struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
-	BT_LE_ADV_OPT_CONN | BT_LE_ADV_OPT_SCANNABLE | BT_LE_ADV_OPT_USE_IDENTITY,
-	0x0640,  /* 1000ms min (1600 * 0.625ms) */
-	0x0960,  /* 1500ms max (2400 * 0.625ms) */
+	BT_LE_ADV_OPT_CONN | BT_LE_ADV_OPT_SCANNABLE,
+	0x0190,  /* 250ms min (400 * 0.625ms) */
+	0x0280,  /* 400ms max (640 * 0.625ms) */
 	NULL
 );
 
@@ -902,7 +889,7 @@ static void print_startup_banner(void)
 	LOG_INF("EMA alpha: %.2f", (double)EMA_ALPHA);
 	LOG_INF("Variance threshold: %.2f", (double)VARIANCE_THRESHOLD);
 	LOG_INF("Min motion hits: %d (debounce)", MIN_MOTION_HITS);
-	LOG_INF("Sample interval: %d ms", ACCEL_SAMPLE_INTERVAL_MS);
+	LOG_INF("Mode: interrupt-only (1Hz data-ready)");
 	LOG_INF("No-motion timeout: %d seconds", NO_MOTION_TIMEOUT_SEC);
 	LOG_INF("Battery update interval: %d seconds", BATTERY_UPDATE_INTERVAL_SEC);
 	LOG_INF("Battery range: %d mV (0%%) - %d mV (100%%)", BATTERY_LOW_THRESHOLD_MV, BATTERY_FULL_MV);
@@ -916,14 +903,6 @@ static int init_peripherals(void)
 	/* Initialize LED */
 	if (init_led() < 0) {
 		LOG_WRN("LED init failed - continuing without LED feedback");
-	}
-
-	/* Startup blink */
-	for (int i = 0; i < STARTUP_BLINK_COUNT; i++) {
-		set_led(1);
-		k_msleep(STARTUP_BLINK_MS);
-		set_led(0);
-		k_msleep(STARTUP_BLINK_MS);
 	}
 
 	/* Initialize LIS3DH accelerometer */
@@ -959,12 +938,10 @@ static int init_peripherals(void)
 	LOG_INF("Configuring hardware interrupt...");
 	err = setup_hardware_interrupt();
 	if (err) {
-		LOG_WRN("Hardware interrupt setup failed: %d - falling back to polling", err);
-		hw_interrupt_available = false;
-	} else {
-		hw_interrupt_available = true;
-		LOG_INF("Hardware interrupt enabled (true low-power mode)");
+		LOG_ERR("Hardware interrupt setup failed: %d - cannot operate without interrupt!", err);
+		return err;
 	}
+	LOG_INF("Hardware interrupt enabled (interrupt-only mode)");
 
 	return 0;
 }
@@ -1031,20 +1008,15 @@ static void process_battery_update(int64_t now)
 #endif
 }
 
-/* Main application loop */
+/* Main application loop (interrupt-only mode) */
 static void run_main_loop(void)
 {
 	/* Start in sleep mode - NOT advertising */
 	set_led(0);  /* Ensure LED is OFF */
 
-	if (hw_interrupt_available) {
-		LOG_INF("Using hardware interrupt (true low-power mode)");
-		/* Clear any pending interrupts from initialization */
-		k_sem_reset(&data_ready_sem);
-	} else {
-		LOG_INF("Using polling for motion detection (fallback)");
-		LOG_INF("Idle poll interval: %d ms", IDLE_POLL_INTERVAL_MS);
-	}
+	LOG_INF("Using hardware interrupt (interrupt-only mode)");
+	/* Clear any pending interrupts from initialization */
+	k_sem_reset(&data_ready_sem);
 	LOG_INF("(Move the device to start BLE advertising)");
 	LOG_INF("BLE is OFF - device should NOT be discoverable");
 
@@ -1072,25 +1044,15 @@ static void run_main_loop(void)
 			 * Only process motion when new data actually arrived.
 			 * Timeout allows us to still process advertising state/battery updates.
 			 */
-			if (hw_interrupt_available) {
-				int sem_ret = k_sem_take(&data_ready_sem, K_MSEC(200));
-				/* Only detect motion if new data arrived (sem_ret == 0) */
-				if (sem_ret == 0 && detect_motion()) {
-					ble.last_motion_time = now;
-				}
-			} else {
-				if (detect_motion()) {
-					ble.last_motion_time = now;
-				}
+			int sem_ret = k_sem_take(&data_ready_sem, K_MSEC(200));
+			/* Only detect motion if new data arrived (sem_ret == 0) */
+			if (sem_ret == 0 && detect_motion()) {
+				ble.last_motion_time = now;
 			}
 
 			process_advertising_state(now);
 			process_battery_update(now);
-
-			if (!hw_interrupt_available) {
-				k_msleep(ACCEL_SAMPLE_INTERVAL_MS);
-			}
-		} else if (hw_interrupt_available) {
+		} else {
 			/*
 			 * TRUE LOW POWER MODE:
 			 * Wait indefinitely for hardware data-ready interrupt.
@@ -1101,21 +1063,10 @@ static void run_main_loop(void)
 			k_sem_take(&data_ready_sem, K_FOREVER);
 
 			if (detect_motion()) {
-				LOG_INF("Motion detected (HW interrupt) - waking up!");
+				LOG_INF("Motion detected - waking up!");
 				ble.last_motion_time = k_uptime_get();
 				start_advertising();
 			}
-		} else {
-			/*
-			 * Polling fallback when interrupt unavailable.
-			 * Check for motion every 2 seconds.
-			 */
-			if (detect_motion()) {
-				LOG_INF("Motion detected (polling) - waking up!");
-				ble.last_motion_time = k_uptime_get();
-				start_advertising();
-			}
-			k_msleep(IDLE_POLL_INTERVAL_MS);
 		}
 	}
 }

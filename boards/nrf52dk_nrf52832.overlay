@@ -6,6 +6,13 @@
  *   SCL -> P0.27
  *   CS  -> VDD (I2C mode)
  *   INT1 -> P0.02 (data-ready interrupt)
+ *   AIN1 -> P0.03 (battery voltage)
+ *
+ * Wiring:
+ *   Battery positive -> P0.03
+ *   Battery negative -> GND
+ *
+ * Note: No voltage divider needed since max voltage (3.0V) is within ADC range (3.6V with 1/6 gain).
  */
 
 &pinctrl {
