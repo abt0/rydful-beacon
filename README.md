@@ -6,19 +6,18 @@ Designed for Rydful App: https://rydful.com
 
 ## Features
 
-- **Hardware-Driven Motion Detection** – LIS3DH accelerometer handles motion detection internally at 1Hz, MCU only wakes on threshold events (~1s latency)
-- **Ultra-Low Power Sleep** – CPU sleeps indefinitely until real motion occurs (~2.5 µA total idle current with external LFXO)
-- **Motion-Triggered Advertising** – BLE advertising starts only when motion exceeds hardware threshold
-- **Battery Monitoring** – Battery voltage measurement with percentage calculation, broadcast via BLE manufacturer data
+- **Hardware Interrupt-Driven Wake** – LIS3DH accelerometer's internal motion engine triggers MCU wake via GPIO interrupt (P0.02/INT1)
+- **Ultra-Low Power Sleep** – MCU sleeps indefinitely with `k_sem_take(K_FOREVER)` until motion interrupt occurs (~2.5 µA total idle current)
+- **Motion-Triggered Advertising** – BLE advertising starts only when motion exceeds hardware threshold (32mg default)
+- **High-Pass Filtered Detection** – Gravity filtered out at 1Hz ODR in hardware, only acceleration changes trigger interrupt
 - **Configurable Timeouts** – Advertising stops after configurable period of no motion (default: 30 seconds)
-- **High-Pass Filtered Detection** – Gravity is filtered out, only acceleration changes trigger wake
-- **Android CDM Compatible** – 250-400ms advertising interval for reliable companion app discovery
+- **Direct I2C Register Access** – Bypasses Zephyr sensor framework for reliable interrupt configuration
+- **Android CDM Compatible** – 250-400ms connectable/scannable advertising interval for reliable companion app discovery
 
 ## Hardware Requirements
 
 - **MCU**: Nordic nRF52832 (nRF52 DK)
 - **Accelerometer**: LIS3DH or LIS2DH (I2C interface)
-- **LED**: Connected to `led0` alias (built-in on dev kits)
 
 ### Wiring (nRF52 DK with LIS3DH)
 
@@ -26,30 +25,27 @@ Designed for Rydful App: https://rydful.com
 |------------|--------------|-------------|
 | SDA        | P0.26        | I2C Data    |
 | SCL        | P0.27        | I2C Clock   |
-| CS         | VDD          | I2C mode select |
 | INT1       | P0.02        | Motion interrupt (required for low-power wake) |
 
 ## Project Structure
 
 ```
 rydful-beacon/
-├── CMakeLists.txt              # Build configuration
-├── Kconfig                     # Custom Kconfig options
-├── prj.conf                    # Zephyr project configuration
-├── hardware/                   # Hardware description
+├── CMakeLists.txt               # Build configuration
+├── prj.conf                     # Zephyr project configuration
+├── hardware/                    # Hardware description
 ├── src/
-│   └── main.c                  # Main application source
+│   └── main.c                   # Main application source
 └── boards/
-    ├── nrf52dk_nrf52832.overlay    # nRF52 DK device tree overlay
-    └── arm/
-        └── rydful_custom/          # Custom PCB board definition
-            ├── rydful_custom.dts           # Device tree
-            ├── rydful_custom-pinctrl.dtsi  # Pin control
-            ├── rydful_custom_defconfig     # Default Kconfig
-            ├── rydful_custom.yaml          # Board metadata
-            ├── Kconfig.board               # Board Kconfig
-            ├── Kconfig.defconfig           # Kconfig defaults
-            └── board.cmake                 # Flash/debug config
+    ├── nrf52dk_nrf52832.overlay # nRF52 DK device tree overlay
+    └── rydful_custom/           # Custom PCB board definition
+          ├── rydful_custom.dts           # Device tree
+          ├── rydful_custom-pinctrl.dtsi  # Pin control
+          ├── rydful_custom_defconfig     # Default Kconfig
+          ├── board.yaml                  # Board metadata
+          ├── Kconfig.rydful_custom       # Board Kconfig
+          ├── Kconfig.defconfig           # Kconfig defaults
+          └── board.cmake                 # Flash/debug config
 ```
 
 ## Supported Boards
@@ -67,8 +63,8 @@ These are defined in `src/main.c`:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `HW_MOTION_THRESHOLD_MG` | 48 mg | Acceleration threshold for motion detection |
-| `HW_MOTION_DURATION` | 1 sample | Required samples above threshold (debounce) |
+| `HW_MOTION_THRESHOLD_MG` | 32 mg | Acceleration threshold for motion detection |
+| `HW_MOTION_DURATION` | 2 samples | Required samples above threshold (debounce) |
 | `NO_MOTION_TIMEOUT_SEC` | 30 | Seconds of no motion before stopping advertising |
 
 The LIS3DH operates at **1Hz ODR** in low-power mode (~2µA) and uses its internal high-pass filter to remove gravity, so only acceleration *changes* trigger the interrupt. Wake latency is ~1 second.
