@@ -1,0 +1,69 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Rydful Custom PCB - nRF52832 BLE Beacon (minimal test config)
+ */
+
+/dts-v1/;
+#include <nordic/nrf52832_qfaa.dtsi>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
+#include "rydful_custom-pinctrl.dtsi"
+
+/ {
+	model = "Rydful Custom Board";
+	compatible = "rydful,custom";
+
+	chosen {
+		zephyr,sram = &sram0;
+		zephyr,flash = &flash0;
+	};
+};
+
+&flash0 {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		/* Single application partition - no bootloader */
+		storage_partition: partition@0 {
+			label = "storage";
+			reg = <0x00000000 0x00080000>;
+		};
+	};
+};
+
+&clock {
+	status = "okay";
+};
+
+&gpiote {
+	status = "okay";
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&i2c0 {
+	compatible = "nordic,nrf-twim";
+	status = "okay";
+	pinctrl-0 = <&i2c0_default>;
+	pinctrl-1 = <&i2c0_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+
+	lis3dh: lis3dh@19 {
+		compatible = "st,lis2dh";
+		reg = <0x19>;
+		irq-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+	};
+};
+
+/* UART disabled */
+&uart0 {
+	status = "disabled";
+};
+

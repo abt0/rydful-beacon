@@ -179,9 +179,9 @@ nrfjprog --reset
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  ACTIVE MODE                                                │
-│  • BLE advertising (connectable, 250-400ms, -4dBm TX)       │
+│  • BLE advertising (connectable, 250-400ms, -12dBm TX)      │
 │  • Each motion interrupt resets 30-second timeout           │
-│  • Total: ~0.7-0.8 mA                                       │
+│  • Total: ~0.5-0.6 mA                                       │
 └──────────────────────┬──────────────────────────────────────┘
                        │ No motion for 30 seconds
                        ▼
@@ -228,8 +228,8 @@ Motion detected - waking up!
 | State | Current | Description |
 |-------|---------|-------------|
 | Sleep | ~2.5 µA | nRF52 System ON (~0.5µA with LFXO) + LIS3DH @ 1Hz (~2µA) |
-| Active (advertising) | ~0.7-0.8 mA avg | BLE connectable advertising @ 250-400ms, -4dBm TX |
-| Peak (TX burst) | ~4-5 mA | During BLE transmit events @ -4dBm (~1-3ms per event) |
+| Active (advertising) | ~0.5-0.6 mA avg | BLE connectable advertising @ 250-400ms, -12dBm TX |
+| Peak (TX burst) | ~3-4 mA | During BLE transmit events @ -12dBm (~1-3ms per event) |
 
 ### Component Breakdown (Sleep Mode)
 
@@ -244,7 +244,7 @@ Motion detected - waking up!
 
 | Component | Current | Notes |
 |-----------|---------|-------|
-| BLE advertising | ~0.6-0.7 mA | 250-400ms interval, connectable/scannable, -4dBm TX |
+| BLE advertising | ~0.45-0.55 mA | 250-400ms interval, connectable/scannable, -12dBm TX |
 | LIS3DHTR @ 1Hz | ~2 µA | Same ODR as sleep |
 | ADC sampling (periodic) | ~1 µA avg | Brief spikes every 5 minutes |
 | CPU overhead | ~0.05 mA | Processing interrupts, state management |
@@ -255,7 +255,7 @@ Motion detected - waking up!
 | Optimization | Impact | Trade-off |
 |--------------|--------|-----------|
 | External 32.768kHz LFXO | ~80% MCU sleep reduction | None (hardware present) |
-| Reduced TX power (-4dBm) | ~15% active reduction | Reduced range (~5-15m vs ~10-30m) |
+| Reduced TX power (-12dBm) | ~35% active reduction | Tight 5m discovery range |
 | LIS3DH 1Hz ODR | ~64% sensor sleep reduction | 1 second wake latency |
 | 30s no-motion timeout | ~3% overall | Slightly faster sleep transition |
 | 5-minute battery updates | ~1% overall | Less frequent battery status |
@@ -294,7 +294,7 @@ Total Daily Consumption (mAh/day) = (I_sleep × T_sleep) + (I_active × T_active
 
 Where:
   I_sleep  = 0.0025 mA (2.5 µA with external LFXO)
-  I_active = 0.75 mA (conservative average, -4dBm TX power)
+  I_active = 0.55 mA (conservative average, -12dBm TX power)
   T_sleep  = 24 - T_active (hours)
   T_active = Active hours per day + (trips × timeout / 3600)
   timeout  = 30 seconds (advertising continues after last motion)
@@ -308,11 +308,11 @@ Battery Life (days) = Effective_Capacity / Daily_Consumption
 
 | Usage Pattern | Active Hours/Day | Daily Draw (mAh) | Estimated Life |
 |---------------|------------------|------------------|----------------|
-| Parked Vehicle | 0.26h | 0.25 | **720 days** (~24 months) |
-| Weekend Rider | 0.58h (avg)* | 0.49 | **367 days** (~12 months) |
-| Commuter (2×/day) | 2.02h | 1.57 | **115 days** (~4 months) |
-| Daily Driver | 3.04h | 2.33 | **77 days** (~2.5 months) |
-| Heavy Use | 8.13h | 6.14 | **29 days** (~4 weeks) |
+| Parked Vehicle | 0.26h | 0.20 | **890 days** (~29 months) |
+| Weekend Rider | 0.58h (avg)* | 0.38 | **477 days** (~16 months) |
+| Commuter (2×/day) | 2.02h | 1.17 | **154 days** (~5 months) |
+| Daily Driver | 3.04h | 1.72 | **104 days** (~3.5 months) |
+| Heavy Use | 8.13h | 4.51 | **40 days** (~6 weeks) |
 
 *Weekend rider averaged over 7 days
 
@@ -320,11 +320,11 @@ Battery Life (days) = Effective_Capacity / Daily_Consumption
 
 | Usage Pattern | Active Hours/Day | Daily Draw (mAh) | Estimated Life |
 |---------------|------------------|------------------|----------------|
-| Parked Vehicle | 0.26h | 0.25 | **4,000 days** (~11 years)† |
-| Weekend Rider | 0.58h (avg) | 0.49 | **2,041 days** (~5.6 years)† |
-| Commuter (2×/day) | 2.02h | 1.57 | **637 days** (~21 months) |
-| Daily Driver | 3.04h | 2.33 | **429 days** (~14 months) |
-| Heavy Use | 8.13h | 6.14 | **163 days** (~5.4 months) |
+| Parked Vehicle | 0.26h | 0.20 | **4,940 days** (~13.5 years)† |
+| Weekend Rider | 0.58h (avg) | 0.38 | **2,650 days** (~7.3 years)† |
+| Commuter (2×/day) | 2.02h | 1.17 | **858 days** (~28 months) |
+| Daily Driver | 3.04h | 1.72 | **580 days** (~19 months) |
+| Heavy Use | 8.13h | 4.51 | **222 days** (~7.3 months) |
 
 †Limited by battery self-discharge (~2-3% per year), practical limit ~5-7 years.
 
@@ -332,11 +332,11 @@ Battery Life (days) = Effective_Capacity / Daily_Consumption
 
 | Usage Pattern | Active Hours/Day | Daily Draw (mAh) | Estimated Life |
 |---------------|------------------|------------------|----------------|
-| Parked Vehicle | 0.26h | 0.25 | **9,600 days** (~26 years)† |
-| Weekend Rider | 0.58h (avg) | 0.49 | **4,898 days** (~13 years)† |
-| Commuter (2×/day) | 2.02h | 1.57 | **1,529 days** (~4.2 years) |
-| Daily Driver | 3.04h | 2.33 | **1,030 days** (~2.8 years) |
-| Heavy Use | 8.13h | 6.14 | **391 days** (~13 months) |
+| Parked Vehicle | 0.26h | 0.20 | **11,860 days** (~32 years)† |
+| Weekend Rider | 0.58h (avg) | 0.38 | **6,360 days** (~17 years)† |
+| Commuter (2×/day) | 2.02h | 1.17 | **2,058 days** (~5.6 years) |
+| Daily Driver | 3.04h | 1.72 | **1,392 days** (~3.8 years) |
+| Heavy Use | 8.13h | 4.51 | **532 days** (~18 months) |
 
 †Alkaline batteries self-discharge ~2-3% per year. Actual life limited to ~5-7 years maximum regardless of load.
 
@@ -344,11 +344,11 @@ Battery Life (days) = Effective_Capacity / Daily_Consumption
 
 | Usage Pattern | Active Hours/Day | Daily Draw (mAh) | Estimated Life |
 |---------------|------------------|------------------|----------------|
-| Parked Vehicle | 0.26h | 0.25 | **12,000 days** (~33 years)† |
-| Weekend Rider | 0.58h (avg) | 0.49 | **6,122 days** (~17 years)† |
-| Commuter (2×/day) | 2.02h | 1.57 | **1,911 days** (~5.2 years) |
-| Daily Driver | 3.04h | 2.33 | **1,288 days** (~3.5 years) |
-| Heavy Use | 8.13h | 6.14 | **489 days** (~16 months) |
+| Parked Vehicle | 0.26h | 0.20 | **14,826 days** (~41 years)† |
+| Weekend Rider | 0.58h (avg) | 0.38 | **7,946 days** (~22 years)† |
+| Commuter (2×/day) | 2.02h | 1.17 | **2,573 days** (~7.0 years) |
+| Daily Driver | 3.04h | 1.72 | **1,740 days** (~4.8 years) |
+| Heavy Use | 8.13h | 4.51 | **665 days** (~22 months) |
 
 †Lithium batteries have ~1% annual self-discharge. Practical limit ~10 years.
 
@@ -358,24 +358,24 @@ This is a common use case: daily work commute with two trips.
 
 **Calculation breakdown:**
 - Morning commute: 1 hour active
-- Evening commute: 1 hour active  
+- Evening commute: 1 hour active
 - Post-trip timeout: 30 seconds × 2 trips = 1 minute
 - **Total active time**: 2h 1min/day ≈ 2.02 hours
 
 **Daily energy consumption:**
 ```
 Sleep:   (24 - 2.02)h × 0.0025mA = 0.055 mAh
-Active:  2.02h × 0.75mA          = 1.515 mAh
+Active:  2.02h × 0.55mA          = 1.111 mAh
 ─────────────────────────────────────────────
-Total:                           = 1.57 mAh/day
+Total:                           = 1.17 mAh/day
 ```
 
 | Battery Type | Capacity | Estimated Life |
 |--------------|----------|----------------|
-| CR2032 | 180 mAh | **115 days** (~4 months) |
-| 2× AAA | 1,000 mAh | **637 days** (~21 months) |
-| 2× AA | 2,400 mAh | **1,529 days** (~4.2 years) |
-| 2× AA Lithium | 3,000 mAh | **1,911 days** (~5.2 years) |
+| CR2032 | 180 mAh | **154 days** (~5 months) |
+| 2× AAA | 1,000 mAh | **858 days** (~28 months) |
+| 2× AA | 2,400 mAh | **2,058 days** (~5.6 years) |
+| 2× AA Lithium | 3,000 mAh | **2,573 days** (~7.0 years) |
 
 ### Temperature Impact
 
@@ -407,11 +407,11 @@ Battery performance degrades significantly in extreme temperatures:
 
 |  | CR2032 | 2× AAA | 2× AA | 2× AA Li |
 |--|--------|--------|-------|----------|
-| **Parked** | 24 mo | 60 mo* | 60 mo* | 60 mo* |
-| **Weekend** | 12 mo | 60 mo* | 60 mo* | 60 mo* |
-| **Commuter** | 4 mo | **21 mo** | 50 mo | 63 mo |
-| **Daily** | 2.5 mo | 14 mo | 34 mo | 42 mo |
-| **Heavy** | 1 mo | 5.4 mo | 13 mo | 16 mo |
+| **Parked** | 29 mo | 60 mo* | 60 mo* | 60 mo* |
+| **Weekend** | 16 mo | 60 mo* | 60 mo* | 60 mo* |
+| **Commuter** | 5 mo | **28 mo** | 67 mo | 84 mo |
+| **Daily** | 3.5 mo | 19 mo | 46 mo | 58 mo |
+| **Heavy** | 1.3 mo | 7 mo | 18 mo | 22 mo |
 
 *Limited by battery self-discharge (~5-7 years for alkaline, ~10 years for lithium), not device consumption
 

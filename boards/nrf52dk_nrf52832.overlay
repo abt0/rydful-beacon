@@ -51,6 +51,11 @@
     };
 };
 
+/* Enable GPIOTE for GPIO interrupts */
+&gpiote {
+    status = "okay";
+};
+
 /* Disable FICR to prevent conflicts with bootloader/softdevice */
 &ficr {
     status = "disabled";

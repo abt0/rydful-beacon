@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# Enable GPIO
+CONFIG_GPIO=y
+
+# Clock configuration - rely on external 32.768 kHz crystal
+CONFIG_CLOCK_CONTROL_NRF_K32SRC_XTAL=y
+
+# Enable console over RTT
+CONFIG_USE_SEGGER_RTT=y
+CONFIG_RTT_CONSOLE=y
+CONFIG_UART_CONSOLE=n
+
+# Flash configuration
+CONFIG_SOC_FLASH_NRF_EMULATE_ONE_BYTE_WRITE_ACCESS=y
+

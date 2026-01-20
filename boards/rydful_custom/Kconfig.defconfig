@@ -6,3 +6,5 @@ config BOARD
 	default "rydful_custom"
 
 endif # BOARD_RYDFUL_CUSTOM
+
+
