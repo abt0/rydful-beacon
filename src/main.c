@@ -14,7 +14,9 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/sensor.h>
+#include <zephyr/drivers/adc.h>
 #include <zephyr/logging/log.h>
+#include <hal/nrf_saadc.h>
 
 LOG_MODULE_REGISTER(beacon, LOG_LEVEL_INF);
 
@@ -30,6 +32,20 @@ LOG_MODULE_REGISTER(beacon, LOG_LEVEL_INF);
 
 /* Seconds of no motion before stopping advertising */
 #define NO_MOTION_TIMEOUT_SEC     30
+
+/* Battery monitoring configuration */
+#define BATTERY_LOW_THRESHOLD_MV  2000  /* 0% battery level */
+#define BATTERY_FULL_MV           3000  /* 100% battery level */
+#define BATTERY_UPDATE_INTERVAL_SEC 300 /* Update every 5 minutes */
+
+/* ADC configuration for battery voltage measurement */
+#define ADC_NODE                  DT_NODELABEL(adc)
+#define ADC_CHANNEL_ID            0
+#define ADC_RESOLUTION_BITS       12
+#define ADC_GAIN                  ADC_GAIN_1_6
+#define ADC_REFERENCE             ADC_REF_INTERNAL
+#define ADC_REF_MV                600  /* Internal reference is 0.6V */
+#define ADC_RESOLUTION            ((1 << ADC_RESOLUTION_BITS) - 1)  /* 4095 for 12-bit */
 
 /*
  * LIS2DH/LIS3DH Register Definitions
@@ -80,12 +96,12 @@ LOG_MODULE_REGISTER(beacon, LOG_LEVEL_INF);
 static const struct device *i2c_dev;
 #define LIS3DH_I2C_ADDR           0x19
 
-/* Sensor device (for initialization check) */
-static const struct device *sensor_dev;
-
-/* GPIO for INT1 interrupt */
-static const struct gpio_dt_spec int1_gpio = GPIO_DT_SPEC_GET_OR(
-	DT_NODELABEL(lis3dh), irq_gpios, {0});
+/* GPIO for INT1 interrupt - P0.02 */
+static const struct gpio_dt_spec int1_gpio = {
+	.port = DEVICE_DT_GET(DT_NODELABEL(gpio0)),
+	.pin = 2,
+	.dt_flags = GPIO_ACTIVE_HIGH
+};
 
 /* Semaphore for interrupt signaling */
 K_SEM_DEFINE(motion_sem, 0, 1);
@@ -97,12 +113,42 @@ static struct gpio_callback int1_cb_data;
 static volatile uint32_t int1_count;
 
 /*
+ * Battery Monitoring
+ */
+
+/* ADC device */
+static const struct device *adc_dev;
+static bool adc_available = false;
+static int16_t adc_buffer;
+
+/* Battery state */
+static struct {
+	uint16_t voltage_mv;
+	uint8_t percentage;
+	bool is_low;
+	int64_t last_update_time;
+} battery = {
+	.voltage_mv = 3000,
+	.percentage = 100,
+	.is_low = false,
+	.last_update_time = 0
+};
+
+/*
  * BLE Advertising Configuration
  */
+
+/* Manufacturer data: [Company ID (2 bytes), Battery %, Low battery flag] */
+static uint8_t mfg_data[] = {
+	0xFF, 0xFF,  /* Company ID (0xFFFF = test/internal use) */
+	100,         /* Battery percentage (0-100) */
+	0x00         /* Low battery flag (0x00 = OK, 0x01 = LOW) */
+};
 
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 	BT_DATA_BYTES(BT_DATA_UUID16_ALL, 0xAA, 0xFE),
+	BT_DATA(BT_DATA_MANUFACTURER_DATA, mfg_data, sizeof(mfg_data)),
 };
 
 static const struct bt_data sd[] = {
@@ -137,6 +183,123 @@ static int lis3dh_write_reg(uint8_t reg, uint8_t val)
 {
 	uint8_t buf[2] = {reg, val};
 	return i2c_write(i2c_dev, buf, 2, LIS3DH_I2C_ADDR);
+}
+
+/*
+ * Battery Monitoring Functions
+ */
+
+/**
+ * Initialize ADC for battery voltage measurement
+ */
+static int init_battery_adc(void)
+{
+	int err;
+
+	adc_dev = DEVICE_DT_GET(ADC_NODE);
+	if (!device_is_ready(adc_dev)) {
+		LOG_ERR("ADC device not ready");
+		return -ENODEV;
+	}
+
+	/* Configure ADC channel */
+	struct adc_channel_cfg channel_cfg = {
+		.gain = ADC_GAIN,
+		.reference = ADC_REFERENCE,
+		.acquisition_time = ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40),
+		.channel_id = ADC_CHANNEL_ID,
+		.input_positive = NRF_SAADC_INPUT_AIN1,  /* P0.03 */
+	};
+
+	err = adc_channel_setup(adc_dev, &channel_cfg);
+	if (err) {
+		LOG_ERR("ADC channel setup failed: %d", err);
+		return err;
+	}
+
+	adc_available = true;
+	LOG_INF("Battery ADC initialized (AIN1/P0.03, gain=1/6, ref=0.6V)");
+	return 0;
+}
+
+/**
+ * Read battery voltage from ADC
+ * Returns voltage in millivolts (mV)
+ */
+static uint16_t read_battery_voltage(void)
+{
+	if (!adc_available) {
+		return 0;
+	}
+
+	int err;
+	struct adc_sequence sequence = {
+		.channels = BIT(ADC_CHANNEL_ID),
+		.buffer = &adc_buffer,
+		.buffer_size = sizeof(adc_buffer),
+		.resolution = ADC_RESOLUTION_BITS,
+	};
+
+	err = adc_read(adc_dev, &sequence);
+	if (err) {
+		LOG_ERR("ADC read failed: %d", err);
+		return 0;
+	}
+
+	/* Convert ADC value to millivolts
+	 * With 1/6 gain and 0.6V reference:
+	 * - ADC measures 0.6V at full scale (4095)
+	 * - Input voltage = ADC_value * (0.6V / 4095) * 6 (gain factor)
+	 * - In mV: voltage_mv = ADC_value * 600mV * 6 / 4095
+	 */
+	int32_t voltage_mv = ((int32_t)adc_buffer * ADC_REF_MV * 6) / ADC_RESOLUTION;
+
+	return (uint16_t)voltage_mv;
+}
+
+/**
+ * Convert battery voltage to percentage (0-100%)
+ * Uses linear interpolation between LOW and FULL thresholds
+ */
+static uint8_t voltage_to_percentage(uint16_t voltage_mv)
+{
+	if (voltage_mv <= BATTERY_LOW_THRESHOLD_MV) {
+		return 0;
+	}
+	if (voltage_mv >= BATTERY_FULL_MV) {
+		return 100;
+	}
+
+	uint32_t range = BATTERY_FULL_MV - BATTERY_LOW_THRESHOLD_MV;
+	uint32_t offset = voltage_mv - BATTERY_LOW_THRESHOLD_MV;
+	return (uint8_t)((offset * 100) / range);
+}
+
+/**
+ * Update battery status and BLE manufacturer data
+ */
+static void update_battery_status(void)
+{
+	battery.voltage_mv = read_battery_voltage();
+	battery.percentage = voltage_to_percentage(battery.voltage_mv);
+	battery.is_low = (battery.voltage_mv <= BATTERY_LOW_THRESHOLD_MV);
+	battery.last_update_time = k_uptime_get();
+
+	/* Update manufacturer data */
+	mfg_data[2] = battery.percentage;
+	mfg_data[3] = battery.is_low ? 0x01 : 0x00;
+
+	LOG_INF("[BATT] Voltage: %d mV, Percentage: %d%% %s",
+		battery.voltage_mv, battery.percentage,
+		battery.is_low ? "(LOW!)" : "(OK)");
+
+	/* Update advertising data if currently advertising */
+	if (app_state.is_advertising) {
+		int err = bt_le_adv_update_data(ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+		if (err) {
+			LOG_ERR("Failed to update advertising data: %d", err);
+		}
+	}
 }
 
 /*
@@ -433,6 +596,12 @@ static void run_main_loop(void)
 				LOG_DBG("Motion interrupt (count: %u)", int1_count);
 			}
 
+			/* Check for battery update interval (every 5 minutes) */
+			int64_t battery_elapsed_sec = (now - battery.last_update_time) / 1000;
+			if (battery_elapsed_sec >= BATTERY_UPDATE_INTERVAL_SEC) {
+				update_battery_status();
+			}
+
 			/* Check for no-motion timeout */
 			int64_t elapsed_sec = (now - app_state.last_motion_time) / 1000;
 			if (elapsed_sec >= NO_MOTION_TIMEOUT_SEC) {
@@ -494,12 +663,6 @@ int main(void)
 		return -ENODEV;
 	}
 
-	/* Get sensor device (optional, for verification) */
-	sensor_dev = DEVICE_DT_GET(DT_NODELABEL(lis3dh));
-	if (!device_is_ready(sensor_dev)) {
-		LOG_WRN("Sensor device not ready (using direct I2C)");
-	}
-
 	/* Configure LIS3DH for hardware motion detection */
 	LOG_INF("Configuring LIS3DH...");
 	k_msleep(10);
@@ -516,6 +679,18 @@ int main(void)
 		LOG_ERR("Failed to configure GPIO interrupt: %d", err);
 		k_msleep(100);
 		return err;
+	}
+
+	/* Initialize battery monitoring */
+	LOG_INF("Initializing battery ADC...");
+	k_msleep(10);
+	err = init_battery_adc();
+	if (err) {
+		LOG_WRN("Battery ADC init failed: %d (continuing without battery monitoring)", err);
+		k_msleep(10);
+	} else {
+		/* Perform initial battery reading */
+		update_battery_status();
 	}
 
 	/* Initialize Bluetooth */

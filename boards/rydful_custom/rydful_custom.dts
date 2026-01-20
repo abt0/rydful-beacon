@@ -8,6 +8,7 @@
 #include <nordic/nrf52832_qfaa.dtsi>
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/adc/nrf-saadc.h>
 #include "rydful_custom-pinctrl.dtsi"
 
 / {
@@ -65,5 +66,21 @@
 /* UART disabled */
 &uart0 {
 	status = "disabled";
+};
+
+/* ADC for battery voltage measurement */
+&adc {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1_6";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,input-positive = <NRF_SAADC_AIN1>;  /* P0.03 */
+		zephyr,resolution = <12>;
+	};
 };
 

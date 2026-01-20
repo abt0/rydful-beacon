@@ -15,6 +15,8 @@
  * Note: No voltage divider needed since max voltage (3.0V) is within ADC range (3.6V with 1/6 gain).
  */
 
+#include <zephyr/dt-bindings/adc/nrf-saadc.h>
+
 &pinctrl {
     i2c0_default_alt: i2c0_default_alt {
         group1 {
