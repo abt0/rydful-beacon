@@ -174,7 +174,7 @@ nrfjprog --reset
 │  • nRF52: System ON sleep with LFXO (~1.8 µA)               │
 │  • Total: ~3.9 µA                                           │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ Motion exceeds threshold (~1s latency)
+                       │ Motion exceeds threshold (~2s latency)
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  ACTIVE MODE                                                │
@@ -271,12 +271,14 @@ Motion detected - waking up!
 
 | Battery Type | Nominal Voltage | Typical Capacity | Effective Capacity* |
 |--------------|-----------------|------------------|---------------------|
-| CR2032 | 3.0V | 225 mAh | ~180 mAh |
+| CR2032 | 3.0V | 225 mAh | ~150 mAh** |
 | 2× AAA Alkaline | 3.0V (1.5V × 2) | 1,200 mAh | ~1,000 mAh |
 | 2× AA Alkaline | 3.0V (1.5V × 2) | 2,850 mAh | ~2,400 mAh |
 | 2× AA Lithium | 3.0V (1.5V × 2) | 3,500 mAh | ~3,000 mAh |
 
 *Effective capacity accounts for ~15-20% derating due to voltage cutoff (2.0V minimum), temperature, and discharge curve.
+
+**CR2032 Pulse Current Derating:** CR2032 batteries experience significant capacity reduction under pulse loads. While average current is low (~55 µA active), the 7.5 mA TX peaks (though brief, ~380µs every 325ms) cause additional derating. Effective capacity reduced from nominal 225 mAh to ~150 mAh for this application. For comparison: at 0.5 mA continuous draw CR2032 provides ~240 mAh, but at 3.0 mA only ~155 mAh remains available.
 
 ### Usage Pattern Definitions
 
@@ -305,18 +307,18 @@ Battery Life (days) = Effective_Capacity / Daily_Consumption
 
 ### Detailed Lifetime Estimates
 
-#### CR2032 (180 mAh effective)
+#### CR2032 (150 mAh effective, pulse-derated)
 
 | Usage Pattern | Active Hours/Day | Daily Draw (mAh) | Estimated Life |
 |---------------|------------------|------------------|----------------|
-| Parked Vehicle | 0.26h | 0.11 | **1,682 days** (~4.6 years)† |
-| Weekend Rider | 0.58h (avg)* | 0.12 | **1,463 days** (~4.0 years)† |
-| Commuter (2×/day) | 2.02h | 0.20 | **914 days** (~2.5 years) |
-| Daily Driver | 3.04h | 0.25 | **723 days** (~2.0 years) |
-| Heavy Use | 8.13h | 0.51 | **354 days** (~11.7 months) |
+| Parked Vehicle | 0.26h | 0.11 | **1,402 days** (~3.8 years)† |
+| Weekend Rider | 0.58h (avg)* | 0.12 | **1,220 days** (~3.3 years)† |
+| Commuter (2×/day) | 2.02h | 0.20 | **761 days** (~2.1 years) |
+| Daily Driver | 3.04h | 0.25 | **602 days** (~1.6 years) |
+| Heavy Use | 8.13h | 0.51 | **295 days** (~9.7 months) |
 
 *Weekend rider averaged over 7 days
-†CR2032 self-discharge ~10-15% per year limits practical life to ~5 years
+†CR2032 self-discharge ~10-15% per year; practical life 1.5-2 years for commuter/daily use due to pulse derating and environmental factors
 
 #### 2× AAA Alkaline (1,000 mAh effective)
 
@@ -372,14 +374,14 @@ Active:  2.02h × 0.055mA         = 0.111 mAh
 Total:                           = 0.197 mAh/day
 ```
 
-| Battery Type | Capacity | Estimated Life |
-|--------------|----------|----------------|
-| CR2032 | 180 mAh | **914 days** (~2.5 years) |
-| 2× AAA | 1,000 mAh | **5,076 days** (~13.9 years)† |
-| 2× AA | 2,400 mAh | **12,183 days** (~33 years)† |
-| 2× AA Lithium | 3,000 mAh | **15,228 days** (~41 years)† |
+| Battery Type | Capacity | Estimated Life | Practical Reality |
+|--------------|----------|----------------|-------------------|
+| CR2032 | 150 mAh | **761 days** (~2.1 years) | 1.5-2 years typical |
+| 2× AAA | 1,000 mAh | **5,076 days** (~13.9 years)† | 5-7 years (self-discharge limit) |
+| 2× AA | 2,400 mAh | **12,183 days** (~33 years)† | 5-7 years (self-discharge limit) |
+| 2× AA Lithium | 3,000 mAh | **15,228 days** (~41 years)† | 10+ years (self-discharge limit) |
 
-†Limited by battery self-discharge, practical limit 5-10 years
+†Limited by battery self-discharge, not device consumption
 
 ### Temperature Impact
 
@@ -399,47 +401,25 @@ Battery performance degrades significantly in extreme temperatures:
 
 | Use Case | Recommended | Rationale |
 |----------|-------------|-----------|
-| **Motorcycle (Weekend)** | 2× AAA or CR2032 | CR2032: 4 years, AAA: 5-7 years (self-discharge limited) |
+| **Motorcycle (Weekend)** | 2× AAA | AAA: 5-7 years (self-discharge limited), better than CR2032 for longevity |
 | **Daily Commuter** | 2× AAA | **5-7 years** (self-discharge limited), compact form factor |
 | **Daily Commuter (extended)** | 2× AA | **5-7 years** (self-discharge limited), best longevity |
 | **Delivery Vehicle** | 2× AA or 2× AA Lithium | AA: ~5 years, Lithium: 10+ years |
-| **Garage Queen** | CR2032 or 2× AAA | Multi-year life, minimal replacement |
+| **Garage Queen** | 2× AAA | Multi-year life, minimal replacement (AAA better than CR2032) |
 | **Extreme Cold Climate** | 2× AA Lithium | Maintains capacity at low temps, 10+ years |
-| **Compact Installation** | CR2032 | Small size, 2-4 years typical |
+| **Compact Installation** | CR2032 | Small size, **1.5-2 years typical** (pulse current limits lifespan) |
 
 ### Quick Reference: Months Until Replacement
 
-|  | CR2032 | 2× AAA | 2× AA | 2× AA Li |
+|  | CR2032** | 2× AAA | 2× AA | 2× AA Li |
 |--|--------|--------|-------|----------|
-| **Parked** | 55 mo* | 60+ mo* | 60+ mo* | 120+ mo* |
-| **Weekend** | 48 mo* | 60+ mo* | 60+ mo* | 120+ mo* |
-| **Commuter** | **30 mo** | 60+ mo* | 60+ mo* | 120+ mo* |
-| **Daily** | 24 mo | 60+ mo* | 60+ mo* | 120+ mo* |
-| **Heavy** | 12 mo | 64 mo* | 60+ mo* | 120+ mo* |
+| **Parked** | 46 mo | 60+ mo* | 60+ mo* | 120+ mo* |
+| **Weekend** | 40 mo | 60+ mo* | 60+ mo* | 120+ mo* |
+| **Commuter** | **25 mo** | 60+ mo* | 60+ mo* | 120+ mo* |
+| **Daily** | 20 mo | 60+ mo* | 60+ mo* | 120+ mo* |
+| **Heavy** | 10 mo | 64 mo* | 60+ mo* | 120+ mo* |
 
 *Limited by battery self-discharge (~5-7 years for alkaline, ~10 years for lithium), not device consumption
-
-## Enabled Zephyr Subsystems
-
-- `CONFIG_GPIO` – LED control
-- `CONFIG_LOG` – Logging
-- `CONFIG_BT` – Bluetooth stack
-- `CONFIG_BT_PERIPHERAL` – Peripheral role
-- `CONFIG_I2C` – Accelerometer communication
-- `CONFIG_SENSOR` – Sensor subsystem
-- `CONFIG_LIS2DH` – LIS3DH/LIS2DH driver (trigger disabled, using direct register access)
-- `CONFIG_ADC` – Battery voltage measurement
-- `CONFIG_FPU` – Floating point support (for diagnostics)
-- `CONFIG_NEWLIB_LIBC` – Math library support
-
-## Optional Configuration
-
-Enable hardware diagnostics on startup (verifies accelerometer is working):
-
-```conf
-CONFIG_BEACON_DIAGNOSTICS=y
-```
-
-## License
+**CR2032 estimates account for pulse current derating; real-world life often 1.5-2 years for commuter/daily use due to environmental factors
 
 SPDX-License-Identifier: Apache-2.0
