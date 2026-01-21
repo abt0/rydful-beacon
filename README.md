@@ -19,6 +19,7 @@ Designed for Rydful App: https://rydful.com
 
 - **MCU**: Nordic nRF52832 (nRF52 DK)
 - **Accelerometer**: LIS3DH or LIS2DH (I2C interface)
+- **Battery**: 2.0-3.6V input (CR2032, 2× AAA/AA alkaline or lithium)
 
 ### Wiring (nRF52 DK with LIS3DH)
 
@@ -27,6 +28,7 @@ Designed for Rydful App: https://rydful.com
 | SDA        | P0.26        | I2C Data    |
 | SCL        | P0.27        | I2C Clock   |
 | INT1       | P0.02        | Motion interrupt (required for low-power wake) |
+| -          | P0.03 (AIN1) | Battery voltage input (via voltage divider if >3.6V) |
 
 ## Project Structure
 
