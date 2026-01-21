@@ -24,11 +24,11 @@ LOG_MODULE_REGISTER(beacon, LOG_LEVEL_INF);
  * Configuration Parameters
  */
 
-/* Motion detection threshold in mg (48mg = sensitive to vehicle vibration) */
-#define HW_MOTION_THRESHOLD_MG    48
+/* Motion detection threshold in mg */
+#define HW_MOTION_THRESHOLD_MG    32
 
-/* Number of samples above threshold before triggering (1 = immediate) */
-#define HW_MOTION_DURATION        1
+/* Number of samples above threshold before triggering */
+#define HW_MOTION_DURATION        2
 
 /* Seconds of no motion before stopping advertising */
 #define NO_MOTION_TIMEOUT_SEC     30
