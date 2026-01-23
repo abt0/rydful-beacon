@@ -1,6 +1,6 @@
 # Rydful Beacon
 
-<img src="hardware/pcb-rec-v2.png" alt="Rydful Beacon PCB" width="200" align="left" style="margin-right: 20px; margin-bottom: 10px;">
+<img src="hardware/pcb-rec.png" alt="Rydful Beacon PCB" width="200" align="left" style="margin-right: 20px; margin-bottom: 10px;">
 
 A motion-triggered BLE beacon application for Nordic nRF52 microcontrollers using the Zephyr RTOS. The device remains in sleep mode until motion is detected via an LIS3DH accelerometer, then starts BLE advertising to enable presence detection.
 
