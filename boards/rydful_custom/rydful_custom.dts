@@ -45,6 +45,8 @@
 
 &gpio0 {
 	status = "okay";
+	/* Use low-power SENSE for edge detection instead of GPIOTE (saves ~450µA) */
+	sense-edge-mask = <0xffffffff>;
 };
 
 &i2c0 {
