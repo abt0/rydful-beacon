@@ -12,7 +12,7 @@ Designed for Rydful App: https://rydful.com
 
 - **Hardware Interrupt-Driven Wake** – LIS3DH accelerometer's internal motion engine triggers MCU wake via GPIO interrupt (P0.02/INT1)
 - **Ultra-Low Power Sleep** – MCU sleeps indefinitely with `k_sem_take(K_FOREVER)` until motion interrupt occurs (~3.9 µA total idle current)
-- **Motion-Triggered Advertising** – BLE advertising starts only when motion exceeds hardware threshold (48mg default)
+- **Motion-Triggered Advertising** – BLE advertising starts only when motion exceeds hardware threshold (32mg default)
 - **High-Pass Filtered Detection** – Gravity filtered out at 1Hz ODR in hardware, only acceleration changes trigger interrupt
 - **Configurable Timeouts** – Advertising stops after configurable period of no motion (default: 30 seconds)
 - **Battery Voltage Monitoring** – ADC-based battery voltage measurement with percentage calculation, included in BLE advertising data (updated every 5 minutes)

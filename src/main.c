@@ -398,7 +398,7 @@ static int configure_hardware_motion(void)
 	/*
 	 * INT1_THS: Motion threshold
 	 * - At 2g range: 1 LSB = 16mg
-	 * - 48mg threshold = 3 LSBs
+	 * - 32mg threshold = 2 LSBs
 	 */
 	uint8_t threshold_lsb = HW_MOTION_THRESHOLD_MG / 16;
 	if (threshold_lsb < 1) {
