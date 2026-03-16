@@ -1,0 +1,9 @@
+board:
+  name: rydful_custom
+  vendor: nordic
+  socs:
+    - name: nrf52832
+      variants:
+        - name: qfaa
+
+
